@@ -1,14 +1,24 @@
 import asyncio
+import time
+from collections.abc import Callable
 
 import httpx
 
 CONTENTS_ROOT = "/ccapi/ver130/contents"
 EVENT_POLL_URL = "/ccapi/ver100/event/polling"
 # 相机无事件时保持连接约 60s 后才返回，read 超时必须大于该时长
-EVENT_POLL_READ_TIMEOUT = 90.0
+EVENT_POLL_READ_TIMEOUT = 65.0
+# 下载停滞判定：窗口内累计传输低于下限即视为相机已断线/卡死，避免界面无限停在“同步中”
+STALL_SECONDS = 30
+STALL_MIN_BYTES = 1024 * 1024
 
 
 class CameraUnreachable(Exception):
+    pass
+
+
+class SyncStopped(Exception):
+    """用户主动停止同步"""
     pass
 
 
@@ -121,17 +131,34 @@ class CanonCamera:
     def thumb_url(self, href: str) -> str:
         return f"{self.base}{href}?kind=thumbnail"
 
-    async def download(self, href: str, dest) -> int:
+    async def download(self, href: str, dest, should_stop: Callable[[], bool] | None = None) -> int:
+        """流式下载文件到 dest。
+
+        断线防护：read 超时 20s 兜底“完全无数据”；传输停滞检测——窗口内累计新增
+        不足 STALL_MIN_BYTES 判定相机断线/卡死，主动中止同步；
+        写盘走线程池，避免备份目录为网络挂载时阻塞事件循环导致整体无响应。
+        """
         size = 0
         try:
-            # read 超时 60s：流式下载正常时数据块间隔不足 1s，
-            # 仅当相机失去响应时才会等满，避免界面长时间停在“同步中”无反馈
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=60.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0)) as client:
                 async with client.stream("GET", self.file_url(href)) as resp:
                     resp.raise_for_status()
                     with open(dest, "wb") as f:
+                        window_start = time.monotonic()
+                        window_bytes = 0
                         async for chunk in resp.aiter_bytes(256 * 1024):
-                            f.write(chunk)
+                            if should_stop and should_stop():
+                                raise SyncStopped("用户停止同步")
+                            now = time.monotonic()
+                            window_bytes += len(chunk)
+                            if now - window_start >= STALL_SECONDS:
+                                if window_bytes < STALL_MIN_BYTES:
+                                    raise CameraUnreachable(
+                                        f"相机传输停滞（{STALL_SECONDS}s 内仅传输 {window_bytes} 字节），可能已断线"
+                                    )
+                                window_start = now
+                                window_bytes = 0
+                            await asyncio.to_thread(f.write, chunk)
                             size += len(chunk)
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
             raise CameraUnreachable(str(e)) from e

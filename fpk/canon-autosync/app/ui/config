@@ -1,7 +1,7 @@
 {
   ".url": {
     "canon-autosync.main": {
-      "title": "佳能相机备份",
+      "title": "佳能备份",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",

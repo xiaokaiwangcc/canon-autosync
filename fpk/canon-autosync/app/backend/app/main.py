@@ -60,6 +60,12 @@ async def trigger_sync():
     return await engine.sync_once()
 
 
+@app.post("/api/sync/stop")
+async def stop_sync():
+    engine.request_stop()
+    return {"ok": True}
+
+
 @app.post("/api/reconnect")
 async def reconnect_camera():
     ok = await engine.reconnect()
@@ -86,20 +92,22 @@ def list_pending():
 
 # 相机单连接处理能力弱：并发缩略图请求会触发 503，连续请求会逐渐卡死。
 # 三重保护：全局串行锁 + 请求间最小间隔 + 内存缓存（轮询刷新不再重复打相机）
+# 再加浏览器缓存头：切页/刷新后命中本地缓存，不再请求后端
 _thumb_lock = asyncio.Lock()
 _thumb_cache: dict[str, tuple[bytes, str]] = {}
 _thumb_last_req = 0.0
+_CACHE_HEADERS = {"Cache-Control": "public, max-age=600"}
 
 @app.get("/api/thumb")
 async def thumbnail(path: str = Query(...)):
     cam: CanonCamera = engine.camera()
     cached = _thumb_cache.get(path)
     if cached:
-        return StreamingResponse(iter([cached[0]]), media_type=cached[1])
+        return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
     async with _thumb_lock:
         cached = _thumb_cache.get(path)
         if cached:
-            return StreamingResponse(iter([cached[0]]), media_type=cached[1])
+            return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
         global _thumb_last_req
         try:
             for attempt in range(2):
@@ -114,7 +122,7 @@ async def thumbnail(path: str = Query(...)):
                     if len(_thumb_cache) > 200:
                         _thumb_cache.clear()
                     _thumb_cache[path] = (resp.content, resp.headers.get("content-type", "image/jpeg"))
-                    return StreamingResponse(iter([resp.content]), media_type=_thumb_cache[path][1])
+                    return StreamingResponse(iter([resp.content]), media_type=_thumb_cache[path][1], headers=_CACHE_HEADERS)
         except (CameraUnreachable, httpx.HTTPError) as e:
             raise HTTPException(502, f"获取缩略图失败：相机连接异常（{e}）")
 
@@ -131,7 +139,7 @@ def preview(path: str = Query(...), size: int | None = None):
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
     if not size:
-        return FileResponse(target)
+        return FileResponse(target, headers=_CACHE_HEADERS)
     try:
         from PIL import Image
 
@@ -141,7 +149,7 @@ def preview(path: str = Query(...), size: int | None = None):
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         img.save(buf, "JPEG", quality=80)
-        return Response(buf.getvalue(), media_type="image/jpeg")
+        return Response(buf.getvalue(), media_type="image/jpeg", headers=_CACHE_HEADERS)
     except Exception:
         raise HTTPException(415, "该格式不支持缩略图")
 

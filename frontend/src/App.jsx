@@ -237,20 +237,38 @@ function Stats({ status }) {
   )
 }
 
-function SyncProgress({ status, onSync }) {
+function SyncProgress({ status, onSync, onStop }) {
   const { progress, syncing } = status
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
   const modeText = status.sync_mode === 'event'
     ? `事件驱动 · 监听中${status.event_listening ? '' : '（重连中）'} · 超过 ${status.poll_interval}s 无事件自动兜底扫描`
     : `定时扫描 · 每 ${status.poll_interval}s 一次`
+  // 进度 60s 无变化且仍在同步中 → 判定卡住，提示相机可能已断线并提供停止入口
+  const [stalled, setStalled] = useState(false)
+  useEffect(() => {
+    setStalled(false)
+    if (!syncing) return
+    const t = setTimeout(() => setStalled(true), 60000)
+    return () => clearTimeout(t)
+  }, [syncing, progress.done, progress.total, progress.current])
   return (
     <div className="card">
       <div className="row" style={{ marginBottom: 8 }}>
         <h2 style={{ margin: 0 }}>同步</h2>
-        <button onClick={onSync} disabled={syncing || !status.camera_online}>
-          {syncing ? '同步中…' : '立即同步'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {syncing && stalled && (
+            <button className="ghost" onClick={onStop}>停止同步</button>
+          )}
+          <button onClick={onSync} disabled={syncing || !status.camera_online}>
+            {syncing ? '同步中…' : '立即同步'}
+          </button>
+        </div>
       </div>
+      {syncing && stalled && (
+        <div className="warning" style={{ margin: '8px 0' }}>
+          同步已 60 秒无进展，相机可能已断线。可点击「停止同步」后重试连接。
+        </div>
+      )}
       {(syncing || progress.total > 0) && (
         <div className="progress-wrap">
           <div className="progress-bar">
@@ -400,13 +418,12 @@ const IconGrid = () => (
 )
 
 function Thumb({ src, name }) {
+  const [attempt, setAttempt] = useState(0)
   const [failed, setFailed] = useState(false)
-  const [retried, setRetried] = useState(false)
-  // 503 等瞬时错误：首次失败后延时自动重试一次
+  // 503 等瞬时错误：失败后延时自动重试（换 key 强制重新加载），最多 2 次；仍失败可点击占位手动重试
   const handleError = () => {
-    if (!retried) {
-      setRetried(true)
-      setTimeout(() => setFailed(false), 1500)
+    if (attempt < 2) {
+      setTimeout(() => setAttempt((a) => a + 1), 1500)
     } else {
       setFailed(true)
     }
@@ -417,9 +434,15 @@ function Thumb({ src, name }) {
       : RAW_EXTS.includes(ext) ? 'thumb-raw'
       : IMAGE_EXTS.includes(ext) ? 'thumb-image'
       : 'thumb-file'
-    return <div className={`thumb thumb-empty ${cls}`} title={name} />
+    return (
+      <div
+        className={`thumb thumb-empty ${cls}`}
+        title={`${name}\n加载失败，点击重试`}
+        onClick={() => { setFailed(false); setAttempt(0) }}
+      />
+    )
   }
-  return <img className="thumb" src={src} alt={name} loading="lazy" onError={handleError} />
+  return <img key={attempt} className="thumb" src={src} alt={name} loading="lazy" onError={handleError} />
 }
 
 function FileList() {
@@ -467,50 +490,63 @@ function FileList() {
           <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title="图标模式"><IconGrid /></button>
         </div>
       </div>
+      {/* 两个 tab 的列表同时渲染、用 display 切换显隐：切换 tab 不卸载图片，避免重复请求相机缩略图 */}
       {view === 'grid' ? (
-        <div className="grid">
-          {currentList.map((x, i) => {
-            const camPath = typeof x === 'string' ? x : x.path
-            const name = camPath.split('/').pop()
-            const src = typeof x === 'string'
-              ? `/api/thumb?path=${encodeURIComponent(x)}`
-              : `/api/preview?path=${encodeURIComponent(x.dest)}&size=320`
-            return (
-              <div className="grid-item" key={camPath} onClick={() => openPreview(i)} title={camPath}>
-                <Thumb src={src} name={name} />
-                <div className="grid-name">{name}</div>
-                <div className="grid-meta">{typeof x === 'string' ? camPath.split('/').slice(-2).join('/') : fmtSize(x.size)}</div>
-              </div>
-            )
-          })}
-          {currentList.length === 0 && <div className="grid-empty muted">{tab === 'synced' ? '暂无记录' : '没有待备份文件'}</div>}
-        </div>
-      ) : tab === 'synced' ? (
-        <table>
-          <thead>
-            <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th></tr>
-          </thead>
-          <tbody>
-            {files.map((f, i) => (
-              <tr key={f.path} onClick={() => openPreview(i)} title="点击预览">
-                <td><Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} /></td>
-                <td>{f.path.split('/').pop()}</td>
-                <td>{fmtSize(f.size)}</td>
-                <td>{f.dest}</td>
-                <td>{fmtTime(f.synced_at)}</td>
-              </tr>
-            ))}
-            {files.length === 0 && <tr><td colSpan="5" className="muted">暂无记录</td></tr>}
-          </tbody>
-        </table>
+        <>
+          <div className="grid" style={tab === 'synced' ? undefined : { display: 'none' }}>
+            {files.map((x, i) => {
+              const name = x.path.split('/').pop()
+              return (
+                <div className="grid-item" key={x.path} onClick={() => openPreview(i)} title={x.path}>
+                  <Thumb src={`/api/preview?path=${encodeURIComponent(x.dest)}&size=320`} name={name} />
+                  <div className="grid-name">{name}</div>
+                  <div className="grid-meta">{fmtSize(x.size)}</div>
+                </div>
+              )
+            })}
+            {files.length === 0 && <div className="grid-empty muted">暂无记录</div>}
+          </div>
+          <div className="grid" style={tab === 'pending' ? undefined : { display: 'none' }}>
+            {pending.map((x, i) => {
+              const name = x.split('/').pop()
+              return (
+                <div className="grid-item" key={x} onClick={() => openPreview(i)} title={x}>
+                  <Thumb src={`/api/thumb?path=${encodeURIComponent(x)}`} name={name} />
+                  <div className="grid-name">{name}</div>
+                  <div className="grid-meta">{x.split('/').slice(-2).join('/')}</div>
+                </div>
+              )
+            })}
+            {pending.length === 0 && <div className="grid-empty muted">没有待备份文件</div>}
+          </div>
+        </>
       ) : (
-        <table>
-          <thead><tr><th>封面</th><th>相机上的文件</th></tr></thead>
-          <tbody>
-            {pending.map((p, i) => <tr key={p} onClick={() => openPreview(i)} title="点击预览"><td><Thumb src={`/api/thumb?path=${encodeURIComponent(p)}`} name={p.split('/').pop()} /></td><td>{p}</td></tr>)}
-            {pending.length === 0 && <tr><td colSpan="2" className="muted">没有待备份文件</td></tr>}
-          </tbody>
-        </table>
+        <>
+          <table style={tab === 'synced' ? undefined : { display: 'none' }}>
+            <thead>
+              <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th></tr>
+            </thead>
+            <tbody>
+              {files.map((f, i) => (
+                <tr key={f.path} onClick={() => openPreview(i)} title="点击预览">
+                  <td><Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} /></td>
+                  <td>{f.path.split('/').pop()}</td>
+                  <td>{fmtSize(f.size)}</td>
+                  <td>{f.dest}</td>
+                  <td>{fmtTime(f.synced_at)}</td>
+                </tr>
+              ))}
+              {files.length === 0 && <tr><td colSpan="5" className="muted">暂无记录</td></tr>}
+            </tbody>
+          </table>
+          <table style={tab === 'pending' ? undefined : { display: 'none' }}>
+            <thead><tr><th>封面</th><th>相机上的文件</th></tr></thead>
+            <tbody>
+              {pending.map((p, i) => <tr key={p} onClick={() => openPreview(i)} title="点击预览"><td><Thumb src={`/api/thumb?path=${encodeURIComponent(p)}`} name={p.split('/').pop()} /></td><td>{p}</td></tr>)}
+              {pending.length === 0 && <tr><td colSpan="2" className="muted">没有待备份文件</td></tr>}
+            </tbody>
+          </table>
+        </>
       )}
       {preview && (
         <PreviewModal
@@ -541,6 +577,11 @@ export default function App() {
 
   const syncNow = async () => {
     await api.sync().catch(() => {})
+    refresh()
+  }
+
+  const stopSync = async () => {
+    await api.stopSync().catch(() => {})
     refresh()
   }
 
@@ -578,7 +619,7 @@ export default function App() {
           <>
             <CameraPanel status={status} />
             <Stats status={status} />
-            <SyncProgress status={status} onSync={syncNow} />
+            <SyncProgress status={status} onSync={syncNow} onStop={stopSync} />
           </>
         )}
         {page === 'files' && <FileList />}

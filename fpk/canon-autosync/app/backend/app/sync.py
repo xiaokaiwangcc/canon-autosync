@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 
-from .ccapi import CanonCamera, CameraUnreachable, EventPollUnsupported
+from .ccapi import CanonCamera, CameraUnreachable, EventPollUnsupported, SyncStopped
 from .config import Config
 from .state import State
 
@@ -32,6 +32,7 @@ class SyncEngine:
         self._task: asyncio.Task | None = None
         self._info_refreshed_at = 0.0
         self._device_fetched = False
+        self._stop_requested = False
 
     def camera(self) -> CanonCamera:
         return CanonCamera(self.config.camera_ip, self.config.camera_port)
@@ -129,6 +130,7 @@ class SyncEngine:
     async def sync_once(self) -> dict:
         if self.syncing:
             return {"skipped": True, "reason": "正在同步中，已跳过"}
+        self._stop_requested = False
         self.syncing = True
         self.progress = {"current": None, "done": 0, "total": 0}
         try:
@@ -147,10 +149,14 @@ class SyncEngine:
             deleted = 0
             delete_failed = 0
             for cam_path in pending:
+                if self._stop_requested:
+                    return {"stopped": True}
                 dest = self.dest_for(cam_path)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 self.progress["current"] = cam_path
-                size = await cam.download(cam_path, dest)
+                size = await cam.download(
+                    cam_path, dest, should_stop=lambda: self._stop_requested
+                )
                 self.state.mark_synced(cam_path, size, str(dest))
                 self.progress["done"] += 1
                 if self.config.delete_after_sync:
@@ -166,6 +172,8 @@ class SyncEngine:
             if delete_failed:
                 result["delete_failed"] = delete_failed
             return result
+        except SyncStopped:
+            return {"stopped": True}
         except CameraUnreachable as e:
             self.camera_online = False
             msg = self._unreachable_msg(e)
@@ -225,6 +233,10 @@ class SyncEngine:
                 # 兜底：任何未捕获异常都不能让主循环死亡
                 print(f"[sync] loop error: {e!r}", flush=True)
                 await asyncio.sleep(5)
+
+    def request_stop(self) -> None:
+        """请求停止当前同步（前端「停止同步」按钮触发，下一数据块到达时生效）。"""
+        self._stop_requested = True
 
     def start(self):
         self._task = asyncio.create_task(self._loop())

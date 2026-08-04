@@ -14,6 +14,7 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
   sync: () => req('/api/sync', { method: 'POST' }),
+  stopSync: () => req('/api/sync/stop', { method: 'POST' }),
   reconnect: () => req('/api/reconnect', { method: 'POST' }),
   files: (offset = 0, limit = 100) => req(`/api/files?offset=${offset}&limit=${limit}`),
   pending: () => req('/api/pending'),
