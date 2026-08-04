@@ -1,0 +1,35 @@
+[
+  {
+    "stepTitle": "备份设置",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_camera_ip",
+        "label": "相机 IP 地址",
+        "initValue": "192.168.5.53",
+        "rules": [
+          { "required": true, "message": "请输入相机 IP 地址" },
+          { "pattern": "^\\d{1,3}(\\.\\d{1,3}){3}$", "message": "IP 地址格式不正确" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_backup_dir",
+        "label": "备份目录",
+        "initValue": "",
+        "rules": [
+          { "required": true, "message": "请输入备份目录" },
+          { "pattern": "^/", "message": "请输入以 / 开头的绝对路径" }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "重要：修改备份目录后，必须在 设置 → 应用设置 → 佳能相机备份 → 访问权限 中添加该目录（读写权限），否则应用无写入权限，备份会失败。"
+      },
+      {
+        "type": "tips",
+        "helpText": "备份目录获取方式：文件管理 → 右键存放文件夹 → 详细信息 → 复制原始路径。"
+      }
+    ]
+  }
+]

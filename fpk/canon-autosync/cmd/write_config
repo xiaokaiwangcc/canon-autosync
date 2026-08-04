@@ -1,0 +1,26 @@
+#!/bin/bash
+set -u
+
+CFG="$TRIM_PKGVAR/config.json"
+BACKUP_DIR="${wizard_backup_dir:-}"
+if [ -z "$BACKUP_DIR" ] && [ -n "${TRIM_DATA_SHARE_PATHS:-}" ]; then
+  BACKUP_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
+fi
+if [ -z "$BACKUP_DIR" ]; then
+  BACKUP_DIR="$TRIM_PKGHOME/photos"
+fi
+CAMERA_IP="${wizard_camera_ip:-192.168.5.53}"
+
+mkdir -p "$TRIM_PKGVAR"
+mkdir -p "$BACKUP_DIR" 2>/dev/null || true
+
+cat > "$CFG" <<EOF
+{
+  "camera_ip": "$CAMERA_IP",
+  "camera_port": 8080,
+  "nas_path": "$BACKUP_DIR",
+  "auto_sync": true,
+  "poll_interval": 30
+}
+EOF
+exit 0

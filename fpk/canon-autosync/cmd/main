@@ -1,0 +1,54 @@
+#!/bin/bash
+set -u
+
+APP_DIR="$TRIM_APPDEST/backend"
+VENV="$APP_DIR/.venv"
+PIDFILE="$TRIM_PKGVAR/app.pid"
+LOGFILE="$TRIM_PKGVAR/app.log"
+
+export PATH="/var/apps/python312/target/bin:$PATH"
+
+ensure_config() {
+  if [ ! -f "$TRIM_PKGVAR/config.json" ]; then
+    "$(dirname "$0")/write_config" >>"$LOGFILE" 2>&1 || {
+      echo "配置初始化失败" > "$TRIM_TEMP_LOGFILE"
+      exit 1
+    }
+  fi
+}
+
+ensure_venv() {
+  "$(dirname "$0")/setup_env"
+}
+
+case "${1:-}" in
+  start)
+    ensure_config
+    ensure_venv
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      exit 0
+    fi
+    export CANON_NAS_DATA="$TRIM_PKGVAR"
+    cd "$APP_DIR" || exit 1
+    nohup "$VENV/bin/python" -m uvicorn app.main:app \
+      --host 0.0.0.0 --port "$TRIM_SERVICE_PORT" >>"$LOGFILE" 2>&1 &
+    echo $! > "$PIDFILE"
+    exit 0
+    ;;
+  stop)
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null
+      rm -f "$PIDFILE"
+    fi
+    exit 0
+    ;;
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      exit 0
+    fi
+    exit 3
+    ;;
+  *)
+    exit 1
+    ;;
+esac

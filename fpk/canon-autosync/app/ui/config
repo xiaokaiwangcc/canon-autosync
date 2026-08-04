@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "canon-autosync.main": {
+      "title": "佳能相机备份",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "8315",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

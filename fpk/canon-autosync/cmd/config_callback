@@ -1,0 +1,8 @@
+#!/bin/bash
+"$(dirname "$0")/write_config" || exit 1
+MAIN="$(dirname "$0")/main"
+if "$MAIN" status; then
+  "$MAIN" stop
+  "$MAIN" start
+fi
+exit 0

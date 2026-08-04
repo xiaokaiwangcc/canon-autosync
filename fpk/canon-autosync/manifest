@@ -1,0 +1,13 @@
+appname="canon-autosync"
+version="1.0.1"
+display_name="佳能备份"
+desc="佳能相机里的照片增量备份到 NAS 指定目录。支持 EOS R7/R6/R5/R3/R10 等支持 CCAPI 的机型。"
+maintainer="canon-autosync"
+source="thirdparty"
+platform="all"
+ctl_stop=true
+service_port=8315
+desktop_uidir="ui"
+desktop_applaunchname="canon-autosync.main"
+install_dep_apps="python312"
+disable_authorization_path=false

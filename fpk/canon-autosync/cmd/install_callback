@@ -1,0 +1,5 @@
+#!/bin/bash
+DIR="$(dirname "$0")"
+"$DIR/write_config" || exit 1
+"$DIR/setup_env"
+exit $?
