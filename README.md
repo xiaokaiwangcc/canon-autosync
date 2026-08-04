@@ -17,8 +17,10 @@
 ## 相机准备
 
 1. 相机固件升级到支持 CCAPI 的版本（R7/R6/R5/R3/R10/R50/M50 II 等）
-2. **激活 CCAPI**（只需一次）：在佳能开发者社区（developercommunity.usa.canon.com，免费注册）下载 CCAPI 开发包，用其中的 Activation Tool 通过 USB 连接相机激活。激活后相机 Wi-Fi/蓝牙连接菜单会出现 CCAPI 选项
-3. 相机菜单：Wi-Fi/蓝牙连接 → CCAPI → 连接路由器，停在显示 IP/端口的界面
+2. **激活 CCAPI**（只需一次）：ccapitool文件中的压缩包解压，用其中的 Activation Tool 通过 USB 连接相机激活（需Windows电脑）。激活后相机 Wi-Fi设置点击进去CCAPI 选项
+3. 相机菜单：
+    - 连接Wi-Fi： Wi-Fi/蓝牙连接 → 连接至智能手机 → 添加要连接的设备 → 不显示 → 通过Wi-Fi连接 → 连接wifi
+    - CCAPI设置：回退到界面，Wi-Fi设置 → Camera Control API → 连接 →  选择对应wifi → 此时出现带http://xxxx:8080/ccapi
 4. 确认 `http://<相机IP>:8080/ccapi/` 返回 JSON
 
 注意：

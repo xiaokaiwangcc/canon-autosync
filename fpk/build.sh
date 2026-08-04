@@ -19,11 +19,18 @@ find "$PKG" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 echo "==> 版本号 +1"
 MANIFEST="$PKG/manifest"
 OLD_VER=$(grep '^version=' "$MANIFEST" | sed 's/version="\(.*\)"/\1/')
-MAJOR=$(echo "$OLD_VER" | cut -d. -f1)
-MINOR=$(echo "$OLD_VER" | cut -d. -f2)
-PATCH=$(echo "$OLD_VER" | cut -d. -f3)
-NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
-sed -i '' "s/^version=\"$OLD_VER\"/version=\"$NEW_VER\"/" "$MANIFEST"
+if [ -n "$FPK_VERSION" ]; then
+  # 环境变量指定版本（如 tag 构建 v1.0.1 -> FPK_VERSION=1.0.1）
+  echo "$FPK_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    || { echo "错误: FPK_VERSION 格式须为 x.y.z: $FPK_VERSION"; exit 1; }
+  NEW_VER="$FPK_VERSION"
+else
+  MAJOR=$(echo "$OLD_VER" | cut -d. -f1)
+  MINOR=$(echo "$OLD_VER" | cut -d. -f2)
+  PATCH=$(echo "$OLD_VER" | cut -d. -f3)
+  NEW_VER="$MAJOR.$MINOR.$((PATCH + 1))"
+fi
+sed -i.bak "s/^version=\"$OLD_VER\"/version=\"$NEW_VER\"/" "$MANIFEST" && rm -f "$MANIFEST.bak"
 echo "    $OLD_VER -> $NEW_VER"
 
 echo "==> 打包 fpk"

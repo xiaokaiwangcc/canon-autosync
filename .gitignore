@@ -3,3 +3,6 @@ __pycache__/
 node_modules/
 dist/
 backend/data/
+.DS_Store
+*.fpk
+fpk/canon-autosync/app/backend/

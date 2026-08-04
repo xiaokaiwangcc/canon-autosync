@@ -1,0 +1,92 @@
+name: 打包 FPK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'fpk/**'
+      - '.github/workflows/build-fpk.yml'
+      # 排除 CI 自动提交的版本号，避免循环触发（paths 过滤对 tag push 不生效）
+      - '!fpk/canon-autosync/manifest'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '指定构建版本 x.y.z（留空则 manifest 自增）'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装 fnpack
+        run: |
+          curl -fsSL -o /usr/local/bin/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x /usr/local/bin/fnpack
+          fnpack --help >/dev/null
+
+      - name: 计算构建版本
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            # tag 构建：v1.0.1 -> 1.0.1
+            VER="${REF_NAME#v}"
+          else
+            VER="$MANUAL_VERSION"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: 打包 fpk（前端构建 + 组装 + 版本处理 + fnpack build）
+        run: bash fpk/build.sh
+        env:
+          FPK_VERSION: ${{ steps.version.outputs.version }}
+
+      - name: 提交版本号自增（仅分支/手动构建，tag 构建不修改仓库）
+        if: github.ref_type != 'tag'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add fpk/canon-autosync/manifest
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: 应用版本号自增"
+            git push
+          fi
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: canon-autosync-fpk
+          path: fpk/canon-autosync/*.fpk
+          if-no-files-found: error
+
+      - name: 创建 Release（仅 tag 构建发布）
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          FPK=$(ls fpk/canon-autosync/*.fpk | head -1)
+          echo "发布 $TAG_NAME: $FPK"
+          gh release create "$TAG_NAME" "$FPK" \
+            --generate-notes \
+            --title "canon-autosync $TAG_NAME"
