@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+**/__pycache__
+**/*.pyc
+node_modules
+frontend/dist
+backend/data
+*.fpk
+fpk/canon-autosync/app
+fpk/canon-autosync/cmd
+fpk/build.sh
+.DS_Store
+README.md

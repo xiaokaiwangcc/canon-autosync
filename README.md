@@ -64,6 +64,30 @@ export NAS_PATH=/Volumes/photos/canon-backup
 
 配置和同步状态存于 `backend/data/`。
 
+## Docker 部署
+
+适用于任何支持 Docker 的 NAS / 服务器（不限于飞牛）。
+
+```bash
+# 构建并启动（默认相机 IP 192.168.5.53、备份目录 /vol1/photos/canon-backup）
+docker compose up -d --build
+```
+
+打开 `http://<NAS IP>:8315`，在"设置"中确认相机 IP 和备份目录。
+
+可用 `.env` 文件覆盖默认配置：
+
+```bash
+CANON_IP=192.168.1.50               # 相机 IP
+BACKUP_DIR=/vol1/photos/canon-backup # 照片备份目录（宿主路径）
+DATA_DIR=./data                     # 配置与同步记录存储位置
+```
+
+部署要点：
+- **host 网络模式**：相机经 Wi-Fi 接入宿主机网络（如 NAS 发射的 AP 热点），容器需共享宿主机网络栈才能直连相机 IP，故 `docker-compose.yml` 使用 `network_mode: host`，服务端口固定 8315
+- **数据持久化**：配置和同步记录保存在 `DATA_DIR`（默认 `./data`）卷中，升级不丢失；照片备份到 `BACKUP_DIR` 卷（容器内路径与宿主路径一致，即 `NAS_PATH`）
+- 镜像为多阶段构建：Node 构建前端静态资源 → Python 3.12 运行时单容器托管（单端口 8315）
+
 ## 打包飞牛 fnOS 应用（.fpk）
 
 ```bash

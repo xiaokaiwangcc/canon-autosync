@@ -1,0 +1,29 @@
+# 佳能相机照片备份 - Docker 部署
+#
+# 用法：
+#   docker compose up -d --build
+#   # 或通过 .env 文件覆盖配置（CANON_IP / BACKUP_DIR / DATA_DIR）
+#
+# 访问：http://<宿主机IP>:8315
+#
+# 注意：相机通过 Wi-Fi 接入宿主机所在网络（如 NAS 发射的 AP 热点），
+# 容器必须使用 host 网络模式才能直连相机 IP，bridge 模式无法访问。
+
+services:
+  canon-autosync:
+    build: .
+    image: canon-autosync:latest
+    container_name: canon-autosync
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # 相机 IP（Wi-Fi 连接后相机屏幕显示 http://<IP>:8080/ccapi）
+      CANON_IP: ${CANON_IP:-192.168.5.53}
+      # 备份目录（容器内路径，须与下方卷挂载的宿主目录一致）
+      NAS_PATH: ${BACKUP_DIR:-/vol1/photos/canon-backup}
+      TZ: Asia/Shanghai
+    volumes:
+      # 配置与同步记录（config.json / state.json），升级不丢失
+      - ${DATA_DIR:-./data}:/data
+      # 照片备份目录（与 NAS_PATH 保持一致）
+      - ${BACKUP_DIR:-/vol1/photos/canon-backup}:${BACKUP_DIR:-/vol1/photos/canon-backup}
