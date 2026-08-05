@@ -5,6 +5,9 @@ on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: ${{ matrix.os }}
@@ -52,6 +55,7 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
             ditto -c -k --sequesterRsrc --keepParent dist/CanonAutoSync.app "${{ matrix.artifact }}.zip"
+            hdiutil create -volname "Canon AutoSync" -srcfolder dist/CanonAutoSync.app -ov -format UDZO "${{ matrix.artifact }}.dmg"
           else
             powershell -Command "Compress-Archive -Path dist/CanonAutoSync -DestinationPath '${{ matrix.artifact }}.zip'"
           fi
@@ -60,4 +64,22 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.zip
+          path: ${{ matrix.artifact }}.*
+
+      - name: 发布到 GitHub Release（仅 tag 构建）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # 等待 fpk 工作流创建 Release（最长 15 分钟），超时则自行创建
+          for i in $(seq 1 60); do
+            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
+            sleep 15
+          done
+          gh release create "$TAG_NAME" --title "canon-autosync $TAG_NAME" --generate-notes 2>/dev/null || true
+          gh release upload "$TAG_NAME" "${{ matrix.artifact }}.zip" --clobber
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            gh release upload "$TAG_NAME" "${{ matrix.artifact }}.dmg" --clobber
+          fi
