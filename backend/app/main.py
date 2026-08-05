@@ -107,11 +107,45 @@ def list_synced(offset: int = 0, limit: int = 100):
     return {"total": total, "items": [{"path": p, **meta} for p, meta in page]}
 
 
+@app.delete("/api/files")
+def delete_synced(path: str = Query(...)):
+    """删除一条已备份记录及其 NAS 上的文件。仅允许删除 nas_path 内的文件，防目录穿越。"""
+    meta = state.remove_synced(path)
+    if meta is None:
+        raise HTTPException(404, "记录不存在")
+    state.ignore(path)  # 相机上的原文件不再被自动同步传回
+    engine.recount_pending()
+    dest = meta.get("dest")
+    deleted_file = False
+    if dest:
+        root = Path(config.nas_path).resolve()
+        target = Path(dest).resolve()
+        if root == target or root in target.parents:
+            try:
+                target.unlink(missing_ok=True)
+                deleted_file = True
+            except OSError as e:
+                log.warning("删除备份文件失败 %s: %s", dest, e)
+    return {"ok": True, "deleted_file": deleted_file}
+
+
+@app.post("/api/files/restore")
+def restore_ignored(path: str = Query(...)):
+    """把文件移出忽略名单：待备份列表和自动同步会重新包含它。"""
+    restored = state.unignore(path)
+    engine.recount_pending()
+    return {"ok": restored}
+
+
 @app.get("/api/pending")
 def list_pending():
-    return [
-        p for p in engine.camera_files if not state.is_synced(p)
+    items = [
+        {"path": p, "ignored": state.is_ignored(p)}
+        for p in engine.camera_files if not state.is_synced(p)
     ]
+    # 被忽略（手动删除备份）的排在最后，不打扰正常待备份浏览
+    items.sort(key=lambda x: x["ignored"])
+    return items
 
 
 # 相机单连接处理能力弱：并发缩略图请求会触发 503，连续请求会逐渐卡死。

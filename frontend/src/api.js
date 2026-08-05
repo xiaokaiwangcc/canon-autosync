@@ -17,5 +17,7 @@ export const api = {
   stopSync: () => req('/api/sync/stop', { method: 'POST' }),
   reconnect: () => req('/api/reconnect', { method: 'POST' }),
   files: (offset = 0, limit = 100) => req(`/api/files?offset=${offset}&limit=${limit}`),
+  deleteFile: (path) => req(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+  restoreFile: (path) => req(`/api/files/restore?path=${encodeURIComponent(path)}`, { method: 'POST' }),
   pending: () => req('/api/pending'),
 }

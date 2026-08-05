@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 
 from .ccapi import CanonCamera, CameraUnreachable, EventPollUnsupported, SyncStopped
-from .config import Config
+from .config import APP_VERSION, Config
 from .state import State
 
 log = logging.getLogger("sync")
@@ -98,7 +98,14 @@ class SyncEngine:
         self.event_listening = False
 
     async def refresh_camera_info(self, force: bool = False) -> None:
-        """刷新电量/温度/卡状态（节流）；设备信息仅在首次连接后获取一次。"""
+        """刷新电量/温度/卡状态（节流）；设备信息仅在首次连接后获取一次。
+
+        CCAPI 原始响应与前端展示/健康检查字段不同名，且新旧固件格式不同，在此统一转换：
+        - 旧固件：battery 返回 {"battery": "0"/"1"/"2"/"AC"}，temperature 返回 {"temperature": "normal"}；
+        - 新固件（EOS R5/R6/R7 等）：battery 返回 {"level": "full"...", "name": "LP-E6NH", ...}，
+          temperature 返回 {"status": "normal"}。
+        归一化为前端语义档位 level/status 格式。
+        """
         cam = self.camera()
         if not self._device_fetched:
             try:
@@ -111,11 +118,25 @@ class SyncEngine:
             return
         self._info_refreshed_at = now
         try:
-            self.camera_info["battery"] = await cam.battery()
+            raw = await cam.battery()
+            # 新旧固件电量键不同：新固件 level（full/partial/low/empty），旧固件 battery（0/1/2/AC）
+            level_map = {
+                "0": "empty", "1": "middle", "2": "high", "AC": "ac",
+                "full": "high", "partial": "middle", "low": "low", "empty": "empty",
+            }
+            raw_level = raw.get("level") or raw.get("battery")
+            self.camera_info["battery"] = {
+                "level": level_map.get(raw_level, "unknown"),
+                "name": raw.get("name"),  # 新固件携带电池型号（如 LP-E6NH），前端展示用
+            }
         except Exception:
             self.camera_info["battery"] = None
         try:
-            self.camera_info["temperature"] = await cam.temperature()
+            raw = await cam.temperature()
+            # 新固件 status 键，旧固件 temperature 键，取值语义相同（normal/high/error）
+            self.camera_info["temperature"] = {
+                "status": raw.get("status") or raw.get("temperature") or "unknown",
+            }
         except Exception:
             self.camera_info["temperature"] = None
         try:
@@ -131,8 +152,9 @@ class SyncEngine:
         batt = self.camera_info.get("battery") or {}
         if batt.get("level") == "empty":
             return "相机电量耗尽，暂停同步"
-        if batt.get("level") == "low":
-            self.camera_warning = "相机电量低，建议连接充电器后再进行大批量传输"
+        # CCAPI 只有三档电量，无 "low" 档："middle"（中等）即应提醒充电
+        if batt.get("level") in ("middle", "low"):
+            self.camera_warning = "相机电量不足，建议连接充电器后再进行大批量传输"
         else:
             self.camera_warning = None
         return None
@@ -154,7 +176,9 @@ class SyncEngine:
             self.camera_files = files
             pending = [
                 p for p in files
-                if Path(p).suffix.lower() in IMAGE_EXTS and not self.state.is_synced(p)
+                if Path(p).suffix.lower() in IMAGE_EXTS
+                and not self.state.is_synced(p)
+                and not self.state.is_ignored(p)  # 手动删除备份的文件不再自动传回
             ]
             self.pending_count = len(pending)
             self.progress["total"] = len(pending)
@@ -293,13 +317,16 @@ class SyncEngine:
         """已备份记录被清空后（如更换备份目录）重算待备份数，让 status 立即反映。"""
         self.pending_count = len([
             p for p in self.camera_files
-            if Path(p).suffix.lower() in IMAGE_EXTS and not self.state.is_synced(p)
+            if Path(p).suffix.lower() in IMAGE_EXTS
+            and not self.state.is_synced(p)
+            and not self.state.is_ignored(p)
         ])
 
     def status(self) -> dict:
         return {
             "camera_online": self.camera_online,
             "camera_ip": self.config.camera_ip,
+            "camera_port": self.config.camera_port,
             "camera": self.camera_info,
             "camera_warning": self.camera_warning,
             "sync_mode": self.sync_mode,
@@ -313,6 +340,8 @@ class SyncEngine:
             "progress": self.progress,
             "camera_file_count": len(self.camera_files),
             "pending_count": self.pending_count,
+            "ignored_count": self.state.ignored_count,
+            "version": APP_VERSION,
             "synced_count": len(self.state.synced),
             "last_sync": self.state.last_sync,
             "last_error": self.state.last_error,

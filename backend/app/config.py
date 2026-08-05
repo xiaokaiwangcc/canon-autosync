@@ -10,6 +10,8 @@ DATA_DIR = Path(
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 
+APP_VERSION = "1.0.1"
+
 
 class Config(BaseModel):
     camera_ip: str = "192.168.5.53"

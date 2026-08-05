@@ -23,6 +23,7 @@ const BATTERY_META = {
   middle: { label: '中等', color: '#ca8a04' },
   low: { label: '偏低', color: '#ea580c' },
   empty: { label: '耗尽', color: '#dc2626' },
+  ac: { label: '外接电源', color: '#16a34a' },
 }
 
 const TEMP_META = {
@@ -113,6 +114,12 @@ const PAGE_TITLES = {
   settings: '设置',
 }
 
+const PAGE_SUBTITLES = {
+  camera: '设备状态与同步进度',
+  files: '存储卡内容浏览与备份管理',
+  settings: '连接与备份参数',
+}
+
 function Sidebar({ page, onNavigate, status }) {
   return (
     <aside className="sidebar">
@@ -133,81 +140,103 @@ function Sidebar({ page, onNavigate, status }) {
         ))}
       </nav>
       <div className="sidebar-footer">
-        <div className="foot-item">
-          <span className={`foot-dot ${status.auto_sync ? 'on' : ''}`} />
-          自动同步 {status.auto_sync ? '开' : '关'}
+        <div className="conn-card">
+          <div className="foot-item conn-status">
+            <span className={`foot-dot ${status.camera_online ? 'on' : ''}`} />
+            <b>{status.camera_online ? '已连接' : '未连接'}</b>
+            <span className="muted" style={{ marginLeft: 'auto' }}>
+              {status.poll_interval}s 轮询
+            </span>
+          </div>
+          {status.camera?.device?.productname && (
+            <div className="conn-name">{status.camera.device.productname}</div>
+          )}
+          <div className="conn-addr">
+            {status.camera_ip} · CCAPI
+          </div>
         </div>
-        <div className="foot-item muted">
-          {status.sync_mode === 'event' ? '事件驱动模式' : '定时扫描模式'}
+        <div className="foot-item muted" style={{ marginTop: 8 }}>
+          自动同步{status.auto_sync ? '已开启' : '已关闭'} · {status.sync_mode === 'event' ? '秒级同步' : '定时扫描模式'}
         </div>
+        {status.version && <div className="app-version">v{status.version}</div>}
       </div>
     </aside>
   )
 }
 
+const ICON_BATTERY = (
+  <>
+    <rect x="1" y="6" width="18" height="12" rx="2" ry="2" />
+    <line x1="23" y1="13" x2="23" y2="11" />
+  </>
+)
+const ICON_THERMOMETER = (
+  <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
+)
+const ICON_FINGERPRINT = (
+  <>
+    <path d="M12 11a3 3 0 0 0-3 3c0 2 1 4 1 6" />
+    <path d="M15 11.5c.2.5.3 1 .3 1.5 0 2.5-1 5-2 8" />
+    <path d="M12 2a9 9 0 0 0-9 9c0 1.5.2 3 .5 4.5" />
+    <path d="M12 2a9 9 0 0 1 9 9c0 1-.1 2-.3 3" />
+    <path d="M12 7a4 4 0 0 1 4 4c0 .6-.05 1.2-.16 1.8" />
+    <path d="M8.5 9A4 4 0 0 0 8 11c0 3 1 6 2 9" />
+  </>
+)
+const ICON_WIFI = (
+  <>
+    <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+    <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+    <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+    <line x1="12" y1="20" x2="12.01" y2="20" />
+  </>
+)
+const ICON_SD = (
+  <>
+    <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+    <path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2" />
+  </>
+)
+
 function CameraPanel({ status }) {
   const cam = status.camera || {}
   const device = cam.device || {}
-  const batt = cam.battery || {}
-  const temp = cam.temperature || {}
   const storages = (cam.storage || {}).storagelist || []
-  const battMeta = BATTERY_META[batt.level] || { label: '—', color: '#9ca3af' }
-  const tempMeta = TEMP_META[temp.status] || { label: '—', color: '#9ca3af' }
 
   return (
-    <div className="card camera-card">
-      <div className="row" style={{ marginBottom: 10 }}>
-        <h2 style={{ margin: 0 }}>相机</h2>
-        {device.productname && (
-          <span className="device-name">
-            {device.productname}
-            {device.firmwareversion && <span className="muted"> · FW {device.firmwareversion}</span>}
-          </span>
-        )}
-      </div>
-      <div className="cam-grid">
-        <div className="cam-cell">
-          <div className="label">电量</div>
-          <div className="cam-line">
-            <span className="cam-dot" style={{ background: battMeta.color, boxShadow: `0 0 6px ${battMeta.color}` }} />
-            <span style={{ color: battMeta.color }}>{battMeta.label}</span>
-            <span className="muted">{batt.name || ''}</span>
+    <div className="card camera-hero">
+      <div className="hero-main">
+        <div className="hero-icon">
+          <Icon paths={NAV_ITEMS[0].icon} size={26} />
+        </div>
+        <div className="hero-info">
+          <div className="hero-name-row">
+            <span className="hero-name">{device.productname || '未识别相机'}</span>
+            {device.firmwareversion && <span className="chip">FW {device.firmwareversion}</span>}
+          </div>
+          <div className="muted">
+            {status.camera_online
+              ? `CCAPI 已连接 · ${status.sync_mode === 'event' ? '事件驱动' : '无线传输'}`
+              : '相机未连接'}
           </div>
         </div>
-        <div className="cam-cell">
-          <div className="label">温度</div>
-          <div className="cam-line">
-            <span className="cam-dot" style={{ background: tempMeta.color, boxShadow: `0 0 6px ${tempMeta.color}` }} />
-            <span style={{ color: tempMeta.color }}>{tempMeta.label}</span>
-          </div>
-        </div>
-        {device.serialnumber && (
-          <div className="cam-cell">
-            <div className="label">序列号</div>
-            <div className="cam-line">{device.serialnumber}</div>
-          </div>
-        )}
-        {device.macaddress && (
-          <div className="cam-cell">
-            <div className="label">MAC</div>
-            <div className="cam-line">{device.macaddress}</div>
-          </div>
+        {status.camera_online && (
+          <span className="badge online hero-badge"><span className="dot" />在线</span>
         )}
       </div>
       {storages.map((s) => (
-        <div className="storage" key={s.name}>
-          <div className="row" style={{ marginBottom: 6 }}>
-            <span className="label" style={{ margin: 0 }}>
+        <div className="hero-storage" key={s.name}>
+          <div className="row" style={{ marginBottom: 8 }}>
+            <span className="label" style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Icon paths={ICON_SD} size={14} />
               存储卡 {s.name}
-              {s.accesscapability === 'readonly' && (
-                <span className="tag readonly">只读</span>
-              )}
+              {s.accesscapability === 'readonly' && <span className="tag readonly">只读</span>}
             </span>
             <span className="muted">
               {fmtSize(s.spacesize)} 可用 / {fmtSize(s.maxsize)} · {s.contentsnumber} 个文件
             </span>
           </div>
-          <div className="capacity-bar">
+          <div className="capacity-bar red">
             <div style={{ width: `${fmtPct(s.spacesize, s.maxsize)}%` }} />
           </div>
         </div>
@@ -216,19 +245,128 @@ function CameraPanel({ status }) {
   )
 }
 
+function InfoCards({ status }) {
+  const cam = status.camera || {}
+  const device = cam.device || {}
+  const batt = cam.battery || {}
+  const temp = cam.temperature || {}
+  const battMeta = BATTERY_META[batt.level] || { label: '—', color: '#9ca3af' }
+  const tempMeta = TEMP_META[temp.status] || { label: '—', color: '#9ca3af' }
+  const battPct = typeof batt.percentage === 'number' ? batt.percentage : null
+
+  const cards = [
+    {
+      icon: ICON_BATTERY,
+      label: '电量',
+      body: (
+        <>
+          <div className="info-value">
+            {battPct != null ? `${battPct}%` : battMeta.label}
+            {batt.name && <span className="info-sub">{batt.name}</span>}
+          </div>
+          <div className="capacity-bar" style={{ background: '#eef0f3' }}>
+            <div style={{ width: battPct != null ? `${battPct}%` : '0%', background: battMeta.color }} />
+          </div>
+        </>
+      ),
+    },
+    {
+      icon: ICON_THERMOMETER,
+      label: '机身温度',
+      body: (
+        <>
+          <div className="info-value" style={{ color: tempMeta.color }}>
+            <span className="cam-dot" style={{ background: tempMeta.color, boxShadow: `0 0 6px ${tempMeta.color}` }} />
+            {tempMeta.label}
+          </div>
+          <div className="muted">持续传输温度监控</div>
+        </>
+      ),
+    },
+    {
+      icon: ICON_FINGERPRINT,
+      label: '序列号',
+      body: (
+        <>
+          <div className="info-value mono">{device.serialnumber || '—'}</div>
+          <div className="muted">机身唯一标识</div>
+        </>
+      ),
+    },
+    {
+      icon: ICON_WIFI,
+      label: 'MAC 地址',
+      body: (
+        <>
+          <div className="info-value mono">{device.macaddress || '—'}</div>
+          <div className="muted">{status.camera_ip || ''}</div>
+        </>
+      ),
+    },
+  ]
+
+  return (
+    <div className="info-grid">
+      {cards.map((c) => (
+        <div className="info-card" key={c.label}>
+          <div className="label info-label">
+            <Icon paths={c.icon} size={13} />
+            {c.label}
+          </div>
+          {c.body}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const ICON_FILE_CHECK = (
+  <>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <polyline points="9 15 11 17 15 13" />
+  </>
+)
+const ICON_HOURGLASS = (
+  <>
+    <path d="M5 22h14" />
+    <path d="M5 2h14" />
+    <path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22" />
+    <path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2" />
+  </>
+)
+const ICON_FILES = (
+  <>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <path d="M16 13H8" />
+    <path d="M16 17H8" />
+  </>
+)
+const ICON_CLOCK = (
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
+  </>
+)
+
 function Stats({ status }) {
   const items = [
-    { label: '已备份', value: status.synced_count },
-    { label: '待备份', value: status.pending_count },
-    { label: '相机文件总数', value: status.camera_file_count },
-    { label: '上次同步', value: fmtTime(status.last_sync) },
+    { icon: ICON_FILE_CHECK, label: '已备份', value: status.synced_count, cls: 'green' },
+    { icon: ICON_HOURGLASS, label: '待备份', value: status.pending_count, cls: 'amber' },
+    { icon: ICON_FILES, label: '相机文件总数', value: status.camera_file_count, cls: 'blue' },
+    { icon: ICON_CLOCK, label: '上次同步', value: fmtTime(status.last_sync), cls: 'gray', small: true },
   ]
   return (
-    <div className="grid">
+    <div className="stat-grid">
       {items.map((it) => (
         <div className="stat" key={it.label}>
+          <div className={`stat-icon ${it.cls}`}>
+            <Icon paths={it.icon} size={16} />
+          </div>
           <div className="label">{it.label}</div>
-          <div className="value" style={it.label === '上次同步' ? { fontSize: 12, paddingTop: 4 } : undefined}>
+          <div className={`value ${it.cls === 'green' ? 'val-green' : it.cls === 'amber' ? 'val-amber' : ''}`}
+            style={it.small ? { fontSize: 14, paddingTop: 2 } : undefined}>
             {it.value}
           </div>
         </div>
@@ -237,12 +375,14 @@ function Stats({ status }) {
   )
 }
 
+const ICON_BOLT = <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+
 function SyncProgress({ status, onSync, onStop }) {
   const { progress, syncing } = status
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
   const modeText = status.sync_mode === 'event'
     ? `事件驱动 · 监听中${status.event_listening ? '' : '（重连中）'} · 超过 ${status.poll_interval}s 无事件自动兜底扫描`
-    : `定时扫描 · 每 ${status.poll_interval}s 一次`
+    : `自动同步 · 每 ${status.poll_interval}s 扫描`
   // 进度 60s 无变化且仍在同步中 → 判定卡住，提示相机可能已断线并提供停止入口
   const [stalled, setStalled] = useState(false)
   useEffect(() => {
@@ -252,10 +392,16 @@ function SyncProgress({ status, onSync, onStop }) {
     return () => clearTimeout(t)
   }, [syncing, progress.done, progress.total, progress.current])
   return (
-    <div className="card">
-      <div className="row" style={{ marginBottom: 8 }}>
-        <h2 style={{ margin: 0 }}>同步</h2>
-        <div style={{ display: 'flex', gap: 8 }}>
+    <div className="card sync-card">
+      <div className="row" style={{ marginBottom: 10 }}>
+        <h2 style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span className="sync-icon"><Icon paths={ICON_BOLT} size={14} /></span>
+          {syncing ? '正在同步' : '同步'}
+        </h2>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {progress.total > 0 && (
+            <span className="progress-count">{progress.done} / {progress.total}</span>
+          )}
           {syncing && stalled && (
             <button className="ghost" onClick={onStop}>停止同步</button>
           )}
@@ -271,24 +417,128 @@ function SyncProgress({ status, onSync, onStop }) {
       )}
       {(syncing || progress.total > 0) && (
         <div className="progress-wrap">
-          <div className="progress-bar">
+          <div className="progress-bar big">
             <div style={{ width: `${pct}%` }} />
-          </div>
-          <div className="progress-text">
-            {progress.done} / {progress.total}
-            {progress.current ? ` — ${progress.current}` : ''}
           </div>
         </div>
       )}
-      <div className="muted">
-        备份目录：{status.nas_path} · 自动同步：{status.auto_sync ? `开（${modeText}）` : '关'}
+      {progress.current && (
+        <div className="current-path">{progress.current}</div>
+      )}
+      <div className="muted sync-footer">
+        备份目录 <span className="mono">{status.nas_path}</span>
+        {status.auto_sync && <><span className="foot-dot on" style={{ marginLeft: 10 }} />{modeText}</>}
+        {!status.auto_sync && ' · 自动同步：关'}
         {status.delete_after_sync && ' · 同步后清理卡上文件：开'}
       </div>
     </div>
   )
 }
 
-function ConfigForm() {
+const ICON_CHECK_CIRCLE = (
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="9 12 11 14 15 10" />
+  </>
+)
+
+function RecentTransfers() {
+  const [items, setItems] = useState([])
+  useEffect(() => {
+    const load = () => api.files(0, 6).then((f) => setItems(f.items)).catch(() => {})
+    load()
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+  }, [])
+  return (
+    <div className="card recent-card">
+      <h2>最近传输</h2>
+      <div className="recent-list">
+        {items.map((f) => (
+          <div className="recent-item" key={f.path}>
+            <span className="recent-check">
+              <Icon paths={ICON_CHECK_CIRCLE} size={15} />
+            </span>
+            <span className="recent-name">{f.path.split('/').pop()}</span>
+            <span className="recent-meta">{fmtSize(f.size)}</span>
+            <span className="recent-meta">{(f.synced_at || '').replace('T', ' ').slice(11)}</span>
+          </div>
+        ))}
+        {items.length === 0 && <div className="muted" style={{ padding: '14px 0' }}>暂无传输记录</div>}
+      </div>
+    </div>
+  )
+}
+
+const ICON_REFRESH = (
+  <>
+    <polyline points="23 4 23 10 17 10" />
+    <polyline points="1 20 1 14 7 14" />
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+  </>
+)
+const ICON_SHIELD = (
+  <>
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    <polyline points="9 12 11 14 15 10" />
+  </>
+)
+const ICON_INFO = (
+  <>
+    <circle cx="12" cy="12" r="10" />
+    <line x1="12" y1="16" x2="12" y2="12" />
+    <line x1="12" y1="8" x2="12.01" y2="8" />
+  </>
+)
+const ICON_GITHUB = (
+  <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+)
+
+const DEFAULT_CFG = {
+  camera_ip: '192.168.5.53',
+  camera_port: 8080,
+  nas_path: '/Volumes/photos/canon-backup',
+  auto_sync: true,
+  sync_on_event: true,
+  delete_after_sync: false,
+  poll_interval: 60,
+}
+
+function SectionCard({ icon, title, subtitle, children }) {
+  return (
+    <div className="card settings-card">
+      <div className="settings-head">
+        <span className="settings-icon"><Icon paths={icon} size={17} /></span>
+        <div>
+          <div className="settings-title">{title}</div>
+          <div className="muted">{subtitle}</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function Toggle({ checked, onChange, label, desc }) {
+  return (
+    <div className="toggle-row">
+      <div className="toggle-text">
+        <div className="toggle-label">{label}</div>
+        <div className="muted">{desc}</div>
+      </div>
+      <button
+        type="button"
+        className={`switch${checked ? ' on' : ''}`}
+        onClick={() => onChange(!checked)}
+        aria-pressed={checked}
+      >
+        <span className="knob" />
+      </button>
+    </div>
+  )
+}
+
+function ConfigForm({ version }) {
   const [cfg, setCfg] = useState(null)
   const [saved, setSaved] = useState(false)
 
@@ -309,51 +559,95 @@ function ConfigForm() {
     setTimeout(() => setSaved(false), 2000)
   }
 
+  const resetDefaults = () => {
+    if (!window.confirm('恢复为默认设置？当前修改将丢失。')) return
+    setCfg({ ...cfg, ...DEFAULT_CFG })
+  }
+
   return (
-    <div className="card">
-      <h2>设置</h2>
-      <form onSubmit={submit}>
-        <div className="form-grid">
-          <div className="field">
-            <label>相机 IP</label>
-            <input value={cfg.camera_ip} onChange={(e) => set('camera_ip', e.target.value)} />
-          </div>
-          <div className="field">
-            <label>端口</label>
-            <input type="number" value={cfg.camera_port} onChange={(e) => set('camera_port', e.target.value)} />
-          </div>
-          <div className="field full">
-            <label>NAS 备份目录</label>
-            <input value={cfg.nas_path} onChange={(e) => set('nas_path', e.target.value)} placeholder="/Volumes/photos/canon-backup" />
-          </div>
-          <div className="field">
-            <label>兜底扫描间隔（秒）</label>
-            <input type="number" min="10" value={cfg.poll_interval} onChange={(e) => set('poll_interval', e.target.value)} />
-          </div>
-          <div className="field check" style={{ alignSelf: 'end' }}>
-            <input id="auto" type="checkbox" checked={cfg.auto_sync} onChange={(e) => set('auto_sync', e.target.checked)} />
-            <label htmlFor="auto" style={{ margin: 0, color: '#1f2430', fontSize: 14 }}>自动同步</label>
-          </div>
-          <div className="field check">
-            <input id="event" type="checkbox" checked={cfg.sync_on_event} onChange={(e) => set('sync_on_event', e.target.checked)} />
-            <label htmlFor="event" style={{ margin: 0, color: '#1f2430', fontSize: 14 }}>
-              事件驱动（拍照后秒级同步）
-            </label>
-          </div>
-          <div className="field check">
-            <input id="del" type="checkbox" checked={cfg.delete_after_sync} onChange={(e) => set('delete_after_sync', e.target.checked)} />
-            <label htmlFor="del" style={{ margin: 0, color: '#1f2430', fontSize: 14 }}>
-              同步后清理卡上文件
-            </label>
-          </div>
-          <div className="field check" style={{ alignSelf: 'end' }} />
+    <form className="settings-form" onSubmit={submit}>
+      <div className="settings-grid">
+        <div className="settings-col">
+          <SectionCard icon={ICON_WIFI} title="相机连接" subtitle="通过 CCAPI 与相机建立无线连接">
+            <div className="form-grid">
+              <div className="field" style={{ gridColumn: 'span 1', flex: 3 }}>
+                <label>相机 IP</label>
+                <input className="mono" value={cfg.camera_ip} onChange={(e) => set('camera_ip', e.target.value)} />
+              </div>
+              <div className="field" style={{ maxWidth: 120 }}>
+                <label>端口</label>
+                <input className="mono" type="number" value={cfg.camera_port} onChange={(e) => set('camera_port', e.target.value)} />
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard icon={ICON_SHIELD} title="高级" subtitle="高风险操作，请确认后开启">
+            <div className="toggle-group" style={{ marginTop: 0 }}>
+              <Toggle
+                checked={cfg.delete_after_sync}
+                onChange={(v) => set('delete_after_sync', v)}
+                label="同步后清理卡上文件"
+                desc="备份校验通过后自动删除存储卡上的原文件"
+              />
+            </div>
+          </SectionCard>
+
+          <SectionCard icon={ICON_INFO} title="关于" subtitle="版本与项目信息">
+            <div className="about-row">
+              <span className="muted">当前版本</span>
+              <span className="chip mono">{version ? `v${version}` : '—'}</span>
+            </div>
+            <div className="about-row">
+              <span className="muted">项目地址</span>
+              <a
+                className="about-link"
+                href="https://github.com/xiaokaiwangcc/canon-autosync"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Icon paths={ICON_GITHUB} size={13} />
+                xiaokaiwangcc/canon-autosync
+              </a>
+            </div>
+          </SectionCard>
         </div>
-        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button type="submit">保存</button>
-          {saved && <span className="muted">已保存</span>}
+
+        <div className="settings-col">
+          <SectionCard icon={ICON_REFRESH} title="同步策略" subtitle="控制备份目录与自动同步行为">
+            <div className="field">
+              <label>NAS 备份目录</label>
+              <input className="mono" value={cfg.nas_path} onChange={(e) => set('nas_path', e.target.value)} placeholder="/Volumes/photos/canon-backup" />
+              <div className="field-hint">支持本地挂载路径或 SMB/NFS 挂载点</div>
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>兜底扫描间隔（秒）</label>
+              <input className="mono" type="number" min="10" value={cfg.poll_interval} onChange={(e) => set('poll_interval', e.target.value)} />
+              <div className="field-hint">事件驱动失效时按此间隔轮询相机文件列表</div>
+            </div>
+            <div className="toggle-group">
+              <Toggle
+                checked={cfg.auto_sync}
+                onChange={(v) => set('auto_sync', v)}
+                label="自动同步"
+                desc="检测到新文件后自动开始备份"
+              />
+              <Toggle
+                checked={cfg.sync_on_event}
+                onChange={(v) => set('sync_on_event', v)}
+                label="事件驱动（拍照后秒级同步）"
+                desc="监听相机事件，按下快门后立即拉取文件"
+              />
+            </div>
+          </SectionCard>
         </div>
-      </form>
-    </div>
+      </div>
+
+      <div className="settings-actions">
+        <button type="button" className="ghost" onClick={resetDefaults}>恢复默认</button>
+        <button type="submit" className="btn-danger">保存设置</button>
+        {saved && <span className="muted" style={{ alignSelf: 'center' }}>已保存</span>}
+      </div>
+    </form>
   )
 }
 
@@ -400,10 +694,10 @@ function PreviewModal({ items, index, onNavigate, onClose }) {
           {(failed || (!isImage && !isVideo)) && (
             <div className="muted">该格式暂不支持预览（{ext || '未知'}）</div>
           )}
+          {hasPrev && <button className="modal-nav prev" onClick={nav(-1)}>‹</button>}
+          {hasNext && <button className="modal-nav next" onClick={nav(1)}>›</button>}
         </div>
       </div>
-      {hasPrev && <button className="modal-nav prev" onClick={nav(-1)}>‹</button>}
-      {hasNext && <button className="modal-nav next" onClick={nav(1)}>›</button>}
     </div>
   )
 }
@@ -415,6 +709,9 @@ const IconList = () => (
 )
 const IconGrid = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
+)
+const IconTrash = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
 )
 
 function Thumb({ src, name }) {
@@ -447,7 +744,8 @@ function Thumb({ src, name }) {
 
 function FileList() {
   const [tab, setTab] = useState('synced')
-  const [view, setView] = useState('list')
+  const [view, setView] = useState('grid')
+  const [query, setQuery] = useState('')
   const [files, setFiles] = useState([])
   const [pending, setPending] = useState([])
   const [preview, setPreview] = useState(null)
@@ -457,17 +755,21 @@ function FileList() {
   const [visible, setVisible] = useState(50)
   const sentinelRef = useRef(null)
 
-  const currentList = tab === 'synced' ? files : pending
+  const rawList = tab === 'synced' ? files : pending
+  const q = query.trim().toLowerCase()
+  const currentList = q
+    ? rawList.filter((x) => x.path.split('/').pop().toLowerCase().includes(q))
+    : rawList
   const shown = currentList.slice(0, visible)
 
   const openPreview = (idx) => {
     // 用全量列表而非已渲染批次：模态框内可翻页到未加载的项（图片 src 仅在展示时才请求）
+    const isP = tab === 'pending'
     const list = currentList.map((x) => {
-      const camPath = typeof x === 'string' ? x : x.path
-      const src = typeof x === 'string'
-        ? `/api/thumb?path=${encodeURIComponent(x)}`
+      const src = isP
+        ? `/api/thumb?path=${encodeURIComponent(x.path)}`
         : `/api/preview?path=${encodeURIComponent(x.dest)}`
-      return { src, name: camPath.split('/').pop() }
+      return { src, name: x.path.split('/').pop() }
     })
     setPreview({ list, index: idx })
   }
@@ -488,6 +790,28 @@ function FileList() {
     return () => clearInterval(t)
   }, [])
 
+  const deleteFile = async (e, camPath) => {
+    e.stopPropagation()
+    const name = camPath.split('/').pop()
+    if (!window.confirm(`删除备份「${name}」？NAS 上的文件将被一并删除，且无法恢复。`)) return
+    try {
+      await api.deleteFile(camPath)
+      setFiles((fs) => fs.filter((f) => f.path !== camPath))
+    } catch {
+      setError('删除失败，请稍后重试')
+    }
+  }
+
+  const restoreFile = async (e, camPath) => {
+    e.stopPropagation()
+    try {
+      await api.restoreFile(camPath)
+      setPending((ps) => ps.map((p) => (p.path === camPath ? { ...p, ignored: false } : p)))
+    } catch {
+      setError('恢复失败，请稍后重试')
+    }
+  }
+
   // 切换 tab/视图时重置分批加载进度
   useEffect(() => setVisible(50), [tab, view])
 
@@ -505,19 +829,31 @@ function FileList() {
   }, [tab, view, shown.length])
 
   return (
-    <div className="card">
+    <div>
       <div className="tabs-row">
-        <div className="tabs">
-          <button className={tab === 'synced' ? 'active' : 'ghost'} onClick={() => setTab('synced')}>
-            已备份 ({files.length})
+        <div className="seg-tabs">
+          <button className={tab === 'synced' ? 'active' : ''} onClick={() => setTab('synced')}>
+            <Icon paths={ICON_CHECK_CIRCLE} size={13} />
+            已备份 <span className="seg-count">{files.length}</span>
           </button>
-          <button className={tab === 'pending' ? 'active' : 'ghost'} onClick={() => setTab('pending')}>
-            待备份 ({pending.length})
+          <button className={tab === 'pending' ? 'active' : ''} onClick={() => setTab('pending')}>
+            <Icon paths={ICON_HOURGLASS} size={13} />
+            待备份 <span className="seg-count">{pending.filter((p) => !p.ignored).length}</span>
           </button>
         </div>
-        <div className="view-toggle">
-          <button className={view === 'list' ? 'active' : 'ghost'} onClick={() => setView('list')} title="列表模式"><IconList /></button>
-          <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title="图标模式"><IconGrid /></button>
+        <div className="files-tools">
+          <div className="search-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索文件名…"
+            />
+          </div>
+          <div className="view-toggle">
+            <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title="图标模式"><IconGrid /></button>
+            <button className={view === 'list' ? 'active' : 'ghost'} onClick={() => setView('list')} title="列表模式"><IconList /></button>
+          </div>
         </div>
       </div>
       {/* 只渲染当前 tab 的列表：display:none 不会阻止图片加载，双列表同时渲染会重复请求缩略图 */}
@@ -525,29 +861,54 @@ function FileList() {
       {!loaded ? (
         <div className="muted" style={{ padding: '18px 0', textAlign: 'center' }}>加载中…</div>
       ) : view === 'grid' ? (
-        <div className="grid">
+        <div className="photo-grid">
           {shown.map((x, i) => {
             const isPending = tab === 'pending'
-            const name = (isPending ? x : x.path).split('/').pop()
+            const name = x.path.split('/').pop()
+            const ignored = isPending && x.ignored
             return (
-              <div className="grid-item" key={isPending ? x : x.path} onClick={() => openPreview(i)} title={isPending ? x : x.path}>
+              <div
+                className={`photo-card${ignored ? ' ignored' : ''}`}
+                key={x.path}
+                onClick={() => openPreview(i)}
+                title={ignored ? `${x.path}\n已忽略，不会自动备份` : x.path}
+              >
+                {!isPending && (
+                  <button
+                    className="photo-del"
+                    title="删除备份"
+                    onClick={(e) => deleteFile(e, x.path)}
+                  >
+                    <IconTrash />
+                  </button>
+                )}
+                {ignored && <span className="ignored-tag">已忽略</span>}
                 <Thumb
                   src={isPending
-                    ? `/api/thumb?path=${encodeURIComponent(x)}`
-                    : `/api/preview?path=${encodeURIComponent(x.dest)}&size=320`}
+                    ? `/api/thumb?path=${encodeURIComponent(x.path)}`
+                    : `/api/preview?path=${encodeURIComponent(x.dest)}&size=480`}
                   name={name}
                 />
-                <div className="grid-name">{name}</div>
-                <div className="grid-meta">{isPending ? x.split('/').slice(-2).join('/') : fmtSize(x.size)}</div>
+                <div className="photo-foot">
+                  <span className="photo-name">{name}</span>
+                  {ignored ? (
+                    <button className="restore-btn" onClick={(e) => restoreFile(e, x.path)}>恢复备份</button>
+                  ) : (
+                    <span className="photo-size">{isPending ? x.path.split('/').slice(-2)[0] : fmtSize(x.size)}</span>
+                  )}
+                </div>
               </div>
             )
           })}
-          {shown.length === 0 && <div className="grid-empty muted">{tab === 'synced' ? '暂无记录' : '没有待备份文件'}</div>}
+          {shown.length === 0 && (
+            <div className="grid-empty muted">{q ? '没有匹配的文件' : tab === 'synced' ? '暂无记录' : '没有待备份文件'}</div>
+          )}
         </div>
       ) : tab === 'synced' ? (
+        <div className="card">
         <table>
           <thead>
-            <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th></tr>
+            <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th><th></th></tr>
           </thead>
           <tbody>
             {shown.map((f, i) => (
@@ -557,19 +918,40 @@ function FileList() {
                 <td>{fmtSize(f.size)}</td>
                 <td>{f.dest}</td>
                 <td>{fmtTime(f.synced_at)}</td>
+                <td>
+                  <button className="row-del" title="删除备份" onClick={(e) => deleteFile(e, f.path)}>
+                    <IconTrash />
+                  </button>
+                </td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan="5" className="muted">暂无记录</td></tr>}
+            {shown.length === 0 && <tr><td colSpan="6" className="muted">暂无记录</td></tr>}
           </tbody>
         </table>
+        </div>
       ) : (
+        <div className="card">
         <table>
-          <thead><tr><th>封面</th><th>相机上的文件</th></tr></thead>
+          <thead><tr><th>封面</th><th>相机上的文件</th><th></th></tr></thead>
           <tbody>
-            {shown.map((p, i) => <tr key={p} onClick={() => openPreview(i)} title="点击预览"><td><Thumb src={`/api/thumb?path=${encodeURIComponent(p)}`} name={p.split('/').pop()} /></td><td>{p}</td></tr>)}
-            {shown.length === 0 && <tr><td colSpan="2" className="muted">没有待备份文件</td></tr>}
+            {shown.map((p, i) => (
+              <tr key={p.path} onClick={() => openPreview(i)} title={p.ignored ? '已忽略，不会自动备份' : '点击预览'}>
+                <td><Thumb src={`/api/thumb?path=${encodeURIComponent(p.path)}`} name={p.path.split('/').pop()} /></td>
+                <td>
+                  {p.path}
+                  {p.ignored && <span className="tag" style={{ marginLeft: 8 }}>已忽略</span>}
+                </td>
+                <td>
+                  {p.ignored && (
+                    <button className="restore-btn" onClick={(e) => restoreFile(e, p.path)}>恢复备份</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {shown.length === 0 && <tr><td colSpan="3" className="muted">没有待备份文件</td></tr>}
           </tbody>
         </table>
+        </div>
       )}
       {shown.length < currentList.length && (
         <div ref={sentinelRef} className="muted" style={{ padding: '10px 0', textAlign: 'center' }}>
@@ -627,7 +1009,10 @@ export default function App() {
       <Sidebar page={page} onNavigate={setPage} status={status} />
       <main className="content">
         <header>
-          <h1>{PAGE_TITLES[page]}</h1>
+          <div>
+            <h1>{PAGE_TITLES[page]}</h1>
+            <div className="page-subtitle">{PAGE_SUBTITLES[page]}</div>
+          </div>
           <div className="header-actions">
             <StatusBadge status={status} />
             <button
@@ -646,12 +1031,16 @@ export default function App() {
         {page === 'camera' && (
           <>
             <CameraPanel status={status} />
+            <InfoCards status={status} />
             <Stats status={status} />
-            <SyncProgress status={status} onSync={syncNow} onStop={stopSync} />
+            <div className="bottom-grid">
+              <SyncProgress status={status} onSync={syncNow} onStop={stopSync} />
+              <RecentTransfers />
+            </div>
           </>
         )}
         {page === 'files' && <FileList />}
-        {page === 'settings' && <ConfigForm />}
+        {page === 'settings' && <ConfigForm version={status.version} />}
       </main>
     </div>
   )

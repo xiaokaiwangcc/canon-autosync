@@ -25,8 +25,9 @@ class State:
         self._retry_scheduled = False  # 是否已安排节流到期后的补写
         if STATE_FILE.exists():
             self._data = json.loads(STATE_FILE.read_text())
+            self._data.setdefault("ignored", [])
         else:
-            self._data = {"synced": {}, "last_sync": None, "last_error": None}
+            self._data = {"synced": {}, "last_sync": None, "last_error": None, "ignored": []}
 
     @staticmethod
     def _write_atomic(content: str) -> None:
@@ -86,7 +87,38 @@ class State:
             if n:
                 self._data["synced"] = {}
                 self._schedule_flush()
+            # 换目录后所有文件都会重新备份，忽略名单一并清空
+            if self._data["ignored"]:
+                self._data["ignored"] = []
+                self._schedule_flush()
             return n
+
+    def ignore(self, path: str) -> None:
+        """加入忽略名单：手动删除备份后，相机上的原文件不再参与自动同步。"""
+        with self._lock:
+            if path not in self._data["ignored"]:
+                self._data["ignored"].append(path)
+                self._schedule_flush()
+
+    def unignore(self, path: str) -> bool:
+        """移出忽略名单（恢复备份），返回是否实际移除。"""
+        with self._lock:
+            if path in self._data["ignored"]:
+                self._data["ignored"].remove(path)
+                self._schedule_flush()
+                return True
+            return False
+
+    def is_ignored(self, path: str) -> bool:
+        return path in self._data["ignored"]
+
+    def remove_synced(self, path: str) -> dict | None:
+        """删除一条已备份记录，返回被删的 meta；不存在返回 None。"""
+        with self._lock:
+            meta = self._data["synced"].pop(path, None)
+            if meta is not None:
+                self._schedule_flush()
+            return meta
 
     def mark_synced(self, path: str, size: int, dest: str):
         with self._lock:
@@ -115,6 +147,10 @@ class State:
     @property
     def synced(self) -> dict:
         return self._data["synced"]
+
+    @property
+    def ignored_count(self) -> int:
+        return len(self._data["ignored"])
 
     @property
     def last_sync(self):
