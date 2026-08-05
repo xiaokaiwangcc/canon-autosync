@@ -64,6 +64,32 @@ export NAS_PATH=/Volumes/photos/canon-backup
 
 配置和同步状态存于 `backend/data/`。
 
+## 桌面应用（macOS / Windows）
+
+基于 pywebview + PyInstaller：本地启动 FastAPI 服务（动态空闲端口，仅监听 127.0.0.1），原生窗口加载前端界面，代码与后端完全复用。
+
+本地运行：
+
+```bash
+cd frontend && npm run build   # 构建前端（首次）
+pip install -r backend/requirements.txt -r desktop/requirements.txt
+python desktop/entry.py        # 弹出桌面窗口
+```
+
+打包：
+
+```bash
+python desktop/make_icons.py   # 生成 icon.ico / icon.icns
+pyinstaller desktop/CanonAutoSync.spec --noconfirm
+```
+
+产物：macOS `dist/CanonAutoSync.app`、Windows `dist/CanonAutoSync/CanonAutoSync.exe`（Windows 需系统已安装 WebView2 Runtime，Win10/11 自带）。打 `v*` tag 触发 GitHub Actions 双平台自动构建（`build-desktop.yml`），产物在 Actions 页面下载。
+
+数据位置（首次启动自动创建默认配置，备份目录默认 `~/Pictures/canon-backup`，可在界面设置中修改）：
+
+- macOS：`~/Library/Application Support/canon-autosync/`
+- Windows：`%APPDATA%\canon-autosync\`
+
 ## Docker 部署
 
 适用于任何支持 Docker 的 NAS / 服务器（不限于飞牛）。
