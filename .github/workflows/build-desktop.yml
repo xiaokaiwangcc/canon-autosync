@@ -47,6 +47,15 @@ jobs:
       - name: 生成应用图标（ico/icns）
         run: python desktop/make_icons.py
 
+      - name: 写入版本号（仅 tag 构建）
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          sed -i.bak "s/APP_VERSION = os.environ.get(\"APP_VERSION\", \".*\")/APP_VERSION = os.environ.get(\"APP_VERSION\", \"$VER\")/" backend/app/config.py
+          rm -f backend/app/config.py.bak
+          grep APP_VERSION backend/app/config.py | head -1
+
       - name: PyInstaller 打包
         run: pyinstaller desktop/CanonAutoSync.spec --noconfirm
 

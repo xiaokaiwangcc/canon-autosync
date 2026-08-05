@@ -33,6 +33,11 @@ fi
 sed -i.bak "s/^version=\"$OLD_VER\"/version=\"$NEW_VER\"/" "$MANIFEST" && rm -f "$MANIFEST.bak"
 echo "    $OLD_VER -> $NEW_VER"
 
+echo "==> 写入后端版本号"
+CFG="$PKG/app/backend/app/config.py"
+sed -i.bak "s/APP_VERSION = os.environ.get(\"APP_VERSION\", \".*\")/APP_VERSION = os.environ.get(\"APP_VERSION\", \"$NEW_VER\")/" "$CFG" && rm -f "$CFG.bak"
+grep APP_VERSION "$CFG" | head -1
+
 echo "==> 打包 fpk"
 if command -v fnpack >/dev/null 2>&1; then
   (cd "$PKG" && fnpack build)

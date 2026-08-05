@@ -10,7 +10,8 @@ DATA_DIR = Path(
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 
-APP_VERSION = "1.0.1"
+# 构建时由 fpk/build.sh / build-desktop.yml 按 tag 写入实际版本
+APP_VERSION = os.environ.get("APP_VERSION", "1.0.1")
 
 
 class Config(BaseModel):
