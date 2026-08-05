@@ -90,6 +90,12 @@ pyinstaller desktop/CanonAutoSync.spec --noconfirm
 - macOS：`~/Library/Application Support/canon-autosync/`
 - Windows：`%APPDATA%\canon-autosync\`
 
+macOS 首次打开提示"无法验证开发者"（应用未签名公证，Gatekeeper 拦截），任选其一绕过：
+
+- 右键应用 →「打开」→ 弹窗点「打开」
+- 系统设置 → 隐私与安全性 →「仍要打开」
+- 命令行：`xattr -d com.apple.quarantine /Applications/CanonAutoSync.app`
+
 ## Docker 部署
 
 适用于任何支持 Docker 的 NAS / 服务器（不限于飞牛）。
