@@ -57,7 +57,7 @@ jobs:
             ditto -c -k --sequesterRsrc --keepParent dist/CanonAutoSync.app "${{ matrix.artifact }}.zip"
             hdiutil create -volname "Canon AutoSync" -srcfolder dist/CanonAutoSync.app -ov -format UDZO "${{ matrix.artifact }}.dmg"
           else
-            powershell -Command "Compress-Archive -Path dist/CanonAutoSync -DestinationPath '${{ matrix.artifact }}.zip'"
+            cp dist/CanonAutoSync.exe "${{ matrix.artifact }}.exe"
           fi
 
       - name: 上传构建产物
@@ -79,7 +79,8 @@ jobs:
             sleep 15
           done
           gh release create "$TAG_NAME" --title "canon-autosync $TAG_NAME" --generate-notes 2>/dev/null || true
-          gh release upload "$TAG_NAME" "${{ matrix.artifact }}.zip" --clobber
           if [ "$RUNNER_OS" = "macOS" ]; then
-            gh release upload "$TAG_NAME" "${{ matrix.artifact }}.dmg" --clobber
+            gh release upload "$TAG_NAME" "${{ matrix.artifact }}.dmg" "${{ matrix.artifact }}.zip" --clobber
+          else
+            gh release upload "$TAG_NAME" "${{ matrix.artifact }}.exe" --clobber
           fi

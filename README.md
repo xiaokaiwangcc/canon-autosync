@@ -83,7 +83,7 @@ python desktop/make_icons.py   # 生成 icon.ico / icon.icns
 pyinstaller desktop/CanonAutoSync.spec --noconfirm
 ```
 
-产物：macOS `dist/CanonAutoSync.app`、Windows `dist/CanonAutoSync/CanonAutoSync.exe`（Windows 需系统已安装 WebView2 Runtime，Win10/11 自带）。打 `v*` tag 触发 GitHub Actions 双平台自动构建（`build-desktop.yml`），产物在 Actions 页面下载。
+产物：macOS `dist/CanonAutoSync.app`、Windows `dist/CanonAutoSync.exe`（单文件，需系统已安装 WebView2 Runtime，Win10/11 自带）。打 `v*` tag 触发 GitHub Actions 双平台自动构建并附带至 Release（`build-desktop.yml`）。
 
 数据位置（首次启动自动创建默认配置，备份目录默认 `~/Pictures/canon-backup`，可在界面设置中修改）：
 

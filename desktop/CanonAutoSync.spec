@@ -6,7 +6,7 @@
     pyinstaller desktop/CanonAutoSync.spec --noconfirm
 产物：
     macOS:  dist/CanonAutoSync.app
-    Windows: dist/CanonAutoSync/  （目录内 CanonAutoSync.exe）
+    Windows: dist/CanonAutoSync.exe（单文件）
 """
 import platform
 from pathlib import Path
@@ -37,12 +37,17 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 if IS_WIN:
+    # Windows：单文件 exe（pythonnet 的 Python.Runtime.dll 由 hook 随包收集）
     exe = EXE(
         pyz,
         a.scripts,
-        exclude_binaries=True,
+        a.binaries,
+        a.datas,
+        [],
         name="CanonAutoSync",
         debug=False,
+        strip=False,
+        upx=False,
         console=False,
         icon=str(ROOT / "desktop" / "icons" / "icon.ico"),
     )
@@ -54,10 +59,7 @@ else:
         name="CanonAutoSync",
         console=False,
     )
-
-coll = COLLECT(exe, a.binaries, a.datas, name="CanonAutoSync")
-
-if not IS_WIN:
+    coll = COLLECT(exe, a.binaries, a.datas, name="CanonAutoSync")
     app = BUNDLE(
         coll,
         name="CanonAutoSync.app",
