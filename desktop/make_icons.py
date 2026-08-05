@@ -24,7 +24,7 @@ def make_ico(src: Path, dst: Path) -> None:
 
 def make_icns(src: Path, dst: Path) -> None:
     if not shutil.which("iconutil"):
-        print("iconutil 不可用，跳过 icns（仅 macOS 需要）")
+        print("iconutil not available, skip icns (macOS only)")
         return
     from PIL import Image
 
@@ -45,8 +45,14 @@ def make_icns(src: Path, dst: Path) -> None:
 
 
 def main() -> None:
+    # Windows 控制台默认代码页（cp1252）无法输出中文，统一为 UTF-8
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     if not SRC.exists():
-        print(f"源图标不存在: {SRC}", file=sys.stderr)
+        print(f"source icon not found: {SRC}", file=sys.stderr)
         sys.exit(1)
     OUT.mkdir(parents=True, exist_ok=True)
     make_ico(SRC, OUT / "icon.ico")
