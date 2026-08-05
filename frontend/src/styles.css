@@ -249,37 +249,6 @@ tr:hover td { background: #f6f7f9; }
 .grid-meta { font-size: 11px; color: #9ca3af; margin-top: 2px; }
 .grid-empty { grid-column: 1 / -1; padding: 24px; text-align: center; }
 
-@media (max-width: 768px) {
-  .layout { flex-direction: column; }
-  .sidebar {
-    width: 100%; height: auto; position: static;
-    flex-direction: row; align-items: center; gap: 12px;
-    padding: 8px 12px; border-right: none; border-bottom: 1px solid #e5e7eb;
-  }
-  .brand { flex-direction: row; align-items: baseline; gap: 4px; padding: 0; border-bottom: none; margin-bottom: 0; }
-  .brand-canon { font-size: 17px; }
-  .brand-sub { font-size: 11px; }
-  .nav { flex-direction: row; gap: 4px; overflow-x: auto; flex: 1; }
-  .nav-item { width: auto; padding: 6px 9px; font-size: 12px; white-space: nowrap; }
-  .sidebar-footer { display: none; }
-  .content { padding: 14px 14px 36px; }
-}
-
-@media (max-width: 900px) {
-  .bottom-grid { grid-template-columns: 1fr; }
-  .photo-grid { grid-template-columns: repeat(3, 1fr); }
-  .settings-grid { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 600px) {
-  .grid { grid-template-columns: repeat(2, 1fr); }
-  .photo-grid { grid-template-columns: repeat(2, 1fr); }
-  .info-grid, .stat-grid { grid-template-columns: repeat(2, 1fr); }
-  .cam-grid { grid-template-columns: repeat(2, 1fr); }
-  .form-grid { grid-template-columns: 1fr; }
-  .header-actions { flex-wrap: wrap; justify-content: flex-end; }
-}
-
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .muted { color: #6b7280; font-size: 11.5px; }
 .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; letter-spacing: .2px; }
@@ -541,3 +510,87 @@ tr:hover td { background: #f6f7f9; }
   font-family: 'SF Mono', Menlo, Consolas, monospace;
 }
 .about-link:hover { text-decoration: underline; }
+
+/* ============================================================
+   响应式：所有媒体查询集中放在文件末尾，
+   确保同优先级下能覆盖前面的基础定义
+   ============================================================ */
+
+@media (max-width: 900px) {
+  .bottom-grid { grid-template-columns: 1fr; }
+  .photo-grid { grid-template-columns: repeat(3, 1fr); }
+  .settings-grid { grid-template-columns: 1fr; }
+  /* 窄屏下 4 列卡片太挤，标签会被压成竖排，提前降为 2 列 */
+  .info-grid, .stat-grid { grid-template-columns: repeat(2, 1fr); }
+  .cam-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 768px) {
+  .layout { flex-direction: column; }
+  /* 移动端：侧边栏变为吸顶导航条，可横滑 */
+  .sidebar {
+    width: 100%; height: auto;
+    position: sticky; top: 0; z-index: 50;
+    flex-direction: row; align-items: center; gap: 12px;
+    padding: 8px 12px; border-right: none; border-bottom: 1px solid #e5e7eb;
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .brand { flex-direction: row; align-items: baseline; gap: 4px; padding: 0; border-bottom: none; margin-bottom: 0; flex-shrink: 0; }
+  .brand-canon { font-size: 17px; }
+  .brand-sub { font-size: 11px; }
+  .nav { flex-direction: row; gap: 4px; overflow-x: auto; flex: 1; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .nav::-webkit-scrollbar { display: none; }
+  /* 加大触控目标 */
+  .nav-item { width: auto; padding: 9px 12px; font-size: 13px; white-space: nowrap; }
+  .sidebar-footer { display: none; }
+  .content { padding: 14px 12px calc(36px + env(safe-area-inset-bottom)); }
+
+  header { flex-wrap: wrap; }
+  h1 { font-size: 17px; }
+
+  /* 表格卡片允许横向滚动，避免挤压变形 */
+  .card:has(table) { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  td, th { white-space: nowrap; }
+  td:first-child, th:first-child { white-space: normal; }
+
+  /* iOS：输入框字号 <16px 聚焦时会自动放大页面 */
+  .field input, .search-box input { font-size: 16px; }
+
+  /* 文件页工具栏换行，搜索框占满一行 */
+  .tabs-row { flex-wrap: wrap; }
+  .files-tools { width: 100%; }
+  .search-box { flex: 1; width: auto; }
+
+  /* 设置页：IP/端口横排改纵排 */
+  .settings-form .form-grid { flex-direction: column; gap: 10px; }
+  .settings-actions { flex-wrap: wrap; }
+  .settings-actions button { flex: 1; padding: 10px 16px; }
+
+  /* 预览模态框：接近全屏，加大翻页按钮 */
+  .modal { padding: 0; }
+  .modal-box { max-height: 100vh; width: 100%; }
+  .modal-body { padding: 8px; }
+  .modal-body img, .modal-body video { max-height: 82vh; border-radius: 0; box-shadow: none; }
+  .modal-nav { width: 44px; height: 44px; }
+  .modal-head { bottom: 16px; }
+
+  /* 同步卡片头部按钮换行 */
+  .sync-card .row { flex-wrap: wrap; }
+  .hero-name { font-size: 16px; }
+  .hero-icon { width: 44px; height: 44px; }
+}
+
+@media (max-width: 600px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+  .photo-grid { grid-template-columns: repeat(2, 1fr); }
+  .form-grid { grid-template-columns: 1fr; }
+  .header-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
+
+/* 触屏设备没有 hover：删除按钮常显，避免无法发现 */
+@media (hover: none) {
+  .photo-del { opacity: 1; }
+  .photo-card:hover { box-shadow: none; transform: none; }
+}

@@ -580,7 +580,35 @@ function ConfigForm({ version }) {
               </div>
             </div>
           </SectionCard>
+<SectionCard icon={ICON_REFRESH} title="同步策略" subtitle="控制备份目录与自动同步行为">
+            <div className="field">
+              <label>NAS 备份目录</label>
+              <input className="mono" value={cfg.nas_path} onChange={(e) => set('nas_path', e.target.value)} placeholder="/Volumes/photos/canon-backup" />
+              <div className="field-hint">支持本地挂载路径或 SMB/NFS 挂载点</div>
+            </div>
+            <div className="field" style={{ marginTop: 12 }}>
+              <label>兜底扫描间隔（秒）</label>
+              <input className="mono" type="number" min="10" value={cfg.poll_interval} onChange={(e) => set('poll_interval', e.target.value)} />
+              <div className="field-hint">事件驱动失效时按此间隔轮询相机文件列表</div>
+            </div>
+            <div className="toggle-group">
+              <Toggle
+                checked={cfg.auto_sync}
+                onChange={(v) => set('auto_sync', v)}
+                label="自动同步"
+                desc="检测到新文件后自动开始备份"
+              />
+              <Toggle
+                checked={cfg.sync_on_event}
+                onChange={(v) => set('sync_on_event', v)}
+                label="事件驱动（拍照后秒级同步）"
+                desc="监听相机事件，按下快门后立即拉取文件"
+              />
+            </div>
+          </SectionCard>
+        </div>
 
+        <div className="settings-col">
           <SectionCard icon={ICON_SHIELD} title="高级" subtitle="高风险操作，请确认后开启">
             <div className="toggle-group" style={{ marginTop: 0 }}>
               <Toggle
@@ -611,37 +639,7 @@ function ConfigForm({ version }) {
             </div>
           </SectionCard>
         </div>
-
-        <div className="settings-col">
-          <SectionCard icon={ICON_REFRESH} title="同步策略" subtitle="控制备份目录与自动同步行为">
-            <div className="field">
-              <label>NAS 备份目录</label>
-              <input className="mono" value={cfg.nas_path} onChange={(e) => set('nas_path', e.target.value)} placeholder="/Volumes/photos/canon-backup" />
-              <div className="field-hint">支持本地挂载路径或 SMB/NFS 挂载点</div>
-            </div>
-            <div className="field" style={{ marginTop: 12 }}>
-              <label>兜底扫描间隔（秒）</label>
-              <input className="mono" type="number" min="10" value={cfg.poll_interval} onChange={(e) => set('poll_interval', e.target.value)} />
-              <div className="field-hint">事件驱动失效时按此间隔轮询相机文件列表</div>
-            </div>
-            <div className="toggle-group">
-              <Toggle
-                checked={cfg.auto_sync}
-                onChange={(v) => set('auto_sync', v)}
-                label="自动同步"
-                desc="检测到新文件后自动开始备份"
-              />
-              <Toggle
-                checked={cfg.sync_on_event}
-                onChange={(v) => set('sync_on_event', v)}
-                label="事件驱动（拍照后秒级同步）"
-                desc="监听相机事件，按下快门后立即拉取文件"
-              />
-            </div>
-          </SectionCard>
-        </div>
       </div>
-
       <div className="settings-actions">
         <button type="button" className="ghost" onClick={resetDefaults}>恢复默认</button>
         <button type="submit" className="btn-danger">保存设置</button>
