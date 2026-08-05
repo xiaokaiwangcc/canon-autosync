@@ -1,7 +1,10 @@
 from contextlib import asynccontextmanager
 import asyncio
+import hashlib
 import io
-import time
+import logging
+import os
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -11,9 +14,13 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .ccapi import CanonCamera, CameraUnreachable
-from .config import Config, load_config, save_config
+from .config import Config, DATA_DIR, load_config, save_config
+from .log import attach_uvicorn_to_file, setup_logging
 from .state import State
 from .sync import SyncEngine
+
+setup_logging()
+log = logging.getLogger("api")
 
 state = State()
 config = load_config()
@@ -22,9 +29,17 @@ engine = SyncEngine(config, state)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    attach_uvicorn_to_file()  # uvicorn 此时已完成自身日志配置，挂上文件 handler
+    log.info(
+        "服务启动：相机 %s:%s，备份目录 %s",
+        config.camera_ip, config.camera_port, config.nas_path,
+    )
     engine.start()
     yield
     engine.stop()
+    # 关停前强制落盘：正常退出（docker stop 等）不丢失最近未写入的同步记录/错误状态
+    await state.flush(force=True)
+    log.info("服务已停止")
 
 
 app = FastAPI(title="canon-nas", lifespan=lifespan)
@@ -47,11 +62,20 @@ def get_config():
 
 
 @app.post("/api/config")
-def update_config(cfg: Config):
+async def update_config(cfg: Config):
     global config
+    old_nas = config.nas_path
     save_config(cfg)
     config = cfg
     engine.config = cfg
+    if Path(cfg.nas_path) != Path(old_nas):
+        # 更换备份目录：清空已备份记录，相机上的文件下一轮同步会重新下载到新目录
+        cleared = state.clear_synced()
+        await state.flush(force=True)  # 路由线程外无事件循环调度，立即落盘
+        engine.recount_pending()
+        log.info("备份目录已更换：%s → %s，已清空 %d 条已备份记录，将重新同步", old_nas, cfg.nas_path, cleared)
+    else:
+        log.info("配置已更新：%s", cfg.model_dump_json())
     return cfg.model_dump()
 
 
@@ -74,13 +98,13 @@ async def reconnect_camera():
 
 @app.get("/api/files")
 def list_synced(offset: int = 0, limit: int = 100):
-    items = [
-        {"path": p, **meta}
-        for p, meta in sorted(
-            state.synced.items(), key=lambda kv: kv[1]["synced_at"], reverse=True
-        )
-    ]
-    return {"total": len(items), "items": items[offset : offset + limit]}
+    # 快照在锁内复制：同步主循环会并发写 state.synced，直接遍历可能抛
+    # RuntimeError（dictionary changed size during iteration）导致接口 500
+    items = state.snapshot_synced()
+    items.sort(key=lambda kv: kv[1]["synced_at"], reverse=True)
+    total = len(items)
+    page = items[offset : offset + limit]
+    return {"total": total, "items": [{"path": p, **meta} for p, meta in page]}
 
 
 @app.get("/api/pending")
@@ -91,11 +115,10 @@ def list_pending():
 
 
 # 相机单连接处理能力弱：并发缩略图请求会触发 503，连续请求会逐渐卡死。
-# 三重保护：全局串行锁 + 请求间最小间隔 + 内存缓存（轮询刷新不再重复打相机）
+# 保护：信号量限制小并发窗口 + 请求失败重试 + 内存缓存（轮询刷新不再重复打相机）
 # 再加浏览器缓存头：切页/刷新后命中本地缓存，不再请求后端
-_thumb_lock = asyncio.Lock()
+_thumb_sem = asyncio.Semaphore(2)
 _thumb_cache: dict[str, tuple[bytes, str]] = {}
-_thumb_last_req = 0.0
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=600"}
 
 @app.get("/api/thumb")
@@ -104,33 +127,65 @@ async def thumbnail(path: str = Query(...)):
     cached = _thumb_cache.get(path)
     if cached:
         return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
-    async with _thumb_lock:
-        cached = _thumb_cache.get(path)
-        if cached:
-            return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
-        global _thumb_last_req
-        try:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:  # 重试复用同一连接
             for attempt in range(2):
-                await asyncio.sleep(max(0.0, 0.3 - (time.monotonic() - _thumb_last_req)))
-                async with httpx.AsyncClient(timeout=10) as client:
+                async with _thumb_sem:
+                    cached = _thumb_cache.get(path)
+                    if cached:
+                        return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
                     resp = await client.get(cam.thumb_url(path))
-                    _thumb_last_req = time.monotonic()
-                    if resp.status_code == 503 and attempt == 0:
-                        await asyncio.sleep(1)
-                        continue
-                    resp.raise_for_status()
-                    if len(_thumb_cache) > 200:
-                        _thumb_cache.clear()
-                    _thumb_cache[path] = (resp.content, resp.headers.get("content-type", "image/jpeg"))
-                    return StreamingResponse(iter([resp.content]), media_type=_thumb_cache[path][1], headers=_CACHE_HEADERS)
-        except (CameraUnreachable, httpx.HTTPError) as e:
-            raise HTTPException(502, f"获取缩略图失败：相机连接异常（{e}）")
+                if resp.status_code == 503 and attempt == 0:
+                    # 退避在信号量外等待，重试期间不占用并发槽
+                    await asyncio.sleep(1)
+                    continue
+                resp.raise_for_status()
+                if len(_thumb_cache) > 200:
+                    # 只清最旧的一半，保留近期热图
+                    for key in list(_thumb_cache)[: len(_thumb_cache) // 2]:
+                        del _thumb_cache[key]
+                _thumb_cache[path] = (resp.content, resp.headers.get("content-type", "image/jpeg"))
+                return StreamingResponse(iter([resp.content]), media_type=_thumb_cache[path][1], headers=_CACHE_HEADERS)
+    except (CameraUnreachable, httpx.HTTPError) as e:
+        raise HTTPException(502, f"获取缩略图失败：相机连接异常（{e}）")
+
+
+THUMB_CACHE_DIR = DATA_DIR / "thumb_cache"
+THUMB_CACHE_MAX = 1000  # 磁盘缓存文件数上限，超出时按修改时间淘汰最旧的一半
+
+
+def _thumb_cache_file(path: str, size: int, mtime: int) -> Path:
+    # key 含源文件 mtime：同名文件被覆盖（重新同步）后自动生成新缩略图
+    key = hashlib.sha1(f"{path}:{size}:{mtime}".encode()).hexdigest()
+    return THUMB_CACHE_DIR / f"{key}.jpg"
+
+
+def _write_thumb_cache(cache_file: Path, content: bytes) -> None:
+    """写磁盘缓存；写失败（磁盘满等）仅跳过，不影响本次响应。写后淘汰超量旧文件。"""
+    try:
+        THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        # 临时文件 + rename 原子写入，避免并发请求互相写坏缓存文件
+        fd, tmp = tempfile.mkstemp(dir=THUMB_CACHE_DIR, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(content)
+            os.replace(tmp, cache_file)
+        except Exception:
+            Path(tmp).unlink(missing_ok=True)  # 清理残留临时文件
+            raise
+        files = list(THUMB_CACHE_DIR.glob("*.jpg"))
+        if len(files) > THUMB_CACHE_MAX:
+            files.sort(key=lambda f: f.stat().st_mtime)
+            for old in files[: len(files) // 2]:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 @app.get("/api/preview")
 def preview(path: str = Query(...), size: int | None = None):
     """预览已备份到 NAS 的文件：仅允许 nas_path 目录内的文件，防目录穿越。
-    带 size 时用 Pillow 生成缩略图（供列表封面），否则返回原图。
+    带 size 时用 Pillow 生成缩略图（结果磁盘缓存，避免每次请求都解码原图），否则返回原图。
     """
     root = Path(config.nas_path).resolve()
     target = Path(path).resolve()
@@ -140,6 +195,9 @@ def preview(path: str = Query(...), size: int | None = None):
         raise HTTPException(404, "文件不存在")
     if not size:
         return FileResponse(target, headers=_CACHE_HEADERS)
+    cache_file = _thumb_cache_file(path, size, int(target.stat().st_mtime))
+    if cache_file.is_file():
+        return FileResponse(cache_file, headers=_CACHE_HEADERS)
     try:
         from PIL import Image
 
@@ -149,9 +207,11 @@ def preview(path: str = Query(...), size: int | None = None):
         if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         img.save(buf, "JPEG", quality=80)
-        return Response(buf.getvalue(), media_type="image/jpeg", headers=_CACHE_HEADERS)
     except Exception:
         raise HTTPException(415, "该格式不支持缩略图")
+    content = buf.getvalue()
+    _write_thumb_cache(cache_file, content)
+    return Response(content, media_type="image/jpeg", headers=_CACHE_HEADERS)
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"

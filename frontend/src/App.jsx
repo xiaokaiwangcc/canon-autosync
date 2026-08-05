@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { api } from './api'
 
 function fmtSize(bytes) {
@@ -451,9 +451,17 @@ function FileList() {
   const [files, setFiles] = useState([])
   const [pending, setPending] = useState([])
   const [preview, setPreview] = useState(null)
+  const [error, setError] = useState(null)
+  const [loaded, setLoaded] = useState(false)
+  // 缩略图分批渲染：首屏 50 张，滚到底部哨兵后再加载下一批，避免一次性请求 200 张
+  const [visible, setVisible] = useState(50)
+  const sentinelRef = useRef(null)
 
   const currentList = tab === 'synced' ? files : pending
+  const shown = currentList.slice(0, visible)
+
   const openPreview = (idx) => {
+    // 用全量列表而非已渲染批次：模态框内可翻页到未加载的项（图片 src 仅在展示时才请求）
     const list = currentList.map((x) => {
       const camPath = typeof x === 'string' ? x : x.path
       const src = typeof x === 'string'
@@ -466,13 +474,35 @@ function FileList() {
 
   useEffect(() => {
     const load = () => {
-      api.files(0, 200).then((d) => setFiles(d.items)).catch(() => {})
-      api.pending().then(setPending).catch(() => {})
+      Promise.all([api.files(0, 200), api.pending()])
+        .then(([f, p]) => {
+          setFiles(f.items)
+          setPending(p)
+          setError(null)
+        })
+        .catch(() => setError('列表加载失败，5 秒后自动重试'))
+        .finally(() => setLoaded(true))
     }
     load()
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
   }, [])
+
+  // 切换 tab/视图时重置分批加载进度
+  useEffect(() => setVisible(50), [tab, view])
+
+  // 列表底部哨兵进入视口时加载下一批缩略图
+  useEffect(() => {
+    if (!sentinelRef.current) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) setVisible((v) => v + 50)
+      },
+      { rootMargin: '300px' }
+    )
+    io.observe(sentinelRef.current)
+    return () => io.disconnect()
+  }, [tab, view, shown.length])
 
   return (
     <div className="card">
@@ -490,63 +520,61 @@ function FileList() {
           <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title="图标模式"><IconGrid /></button>
         </div>
       </div>
-      {/* 两个 tab 的列表同时渲染、用 display 切换显隐：切换 tab 不卸载图片，避免重复请求相机缩略图 */}
-      {view === 'grid' ? (
-        <>
-          <div className="grid" style={tab === 'synced' ? undefined : { display: 'none' }}>
-            {files.map((x, i) => {
-              const name = x.path.split('/').pop()
-              return (
-                <div className="grid-item" key={x.path} onClick={() => openPreview(i)} title={x.path}>
-                  <Thumb src={`/api/preview?path=${encodeURIComponent(x.dest)}&size=320`} name={name} />
-                  <div className="grid-name">{name}</div>
-                  <div className="grid-meta">{fmtSize(x.size)}</div>
-                </div>
-              )
-            })}
-            {files.length === 0 && <div className="grid-empty muted">暂无记录</div>}
-          </div>
-          <div className="grid" style={tab === 'pending' ? undefined : { display: 'none' }}>
-            {pending.map((x, i) => {
-              const name = x.split('/').pop()
-              return (
-                <div className="grid-item" key={x} onClick={() => openPreview(i)} title={x}>
-                  <Thumb src={`/api/thumb?path=${encodeURIComponent(x)}`} name={name} />
-                  <div className="grid-name">{name}</div>
-                  <div className="grid-meta">{x.split('/').slice(-2).join('/')}</div>
-                </div>
-              )
-            })}
-            {pending.length === 0 && <div className="grid-empty muted">没有待备份文件</div>}
-          </div>
-        </>
+      {/* 只渲染当前 tab 的列表：display:none 不会阻止图片加载，双列表同时渲染会重复请求缩略图 */}
+      {error && <div className="error" style={{ margin: '0 0 10px' }}>{error}</div>}
+      {!loaded ? (
+        <div className="muted" style={{ padding: '18px 0', textAlign: 'center' }}>加载中…</div>
+      ) : view === 'grid' ? (
+        <div className="grid">
+          {shown.map((x, i) => {
+            const isPending = tab === 'pending'
+            const name = (isPending ? x : x.path).split('/').pop()
+            return (
+              <div className="grid-item" key={isPending ? x : x.path} onClick={() => openPreview(i)} title={isPending ? x : x.path}>
+                <Thumb
+                  src={isPending
+                    ? `/api/thumb?path=${encodeURIComponent(x)}`
+                    : `/api/preview?path=${encodeURIComponent(x.dest)}&size=320`}
+                  name={name}
+                />
+                <div className="grid-name">{name}</div>
+                <div className="grid-meta">{isPending ? x.split('/').slice(-2).join('/') : fmtSize(x.size)}</div>
+              </div>
+            )
+          })}
+          {shown.length === 0 && <div className="grid-empty muted">{tab === 'synced' ? '暂无记录' : '没有待备份文件'}</div>}
+        </div>
+      ) : tab === 'synced' ? (
+        <table>
+          <thead>
+            <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th></tr>
+          </thead>
+          <tbody>
+            {shown.map((f, i) => (
+              <tr key={f.path} onClick={() => openPreview(i)} title="点击预览">
+                <td><Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} /></td>
+                <td>{f.path.split('/').pop()}</td>
+                <td>{fmtSize(f.size)}</td>
+                <td>{f.dest}</td>
+                <td>{fmtTime(f.synced_at)}</td>
+              </tr>
+            ))}
+            {shown.length === 0 && <tr><td colSpan="5" className="muted">暂无记录</td></tr>}
+          </tbody>
+        </table>
       ) : (
-        <>
-          <table style={tab === 'synced' ? undefined : { display: 'none' }}>
-            <thead>
-              <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th></tr>
-            </thead>
-            <tbody>
-              {files.map((f, i) => (
-                <tr key={f.path} onClick={() => openPreview(i)} title="点击预览">
-                  <td><Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} /></td>
-                  <td>{f.path.split('/').pop()}</td>
-                  <td>{fmtSize(f.size)}</td>
-                  <td>{f.dest}</td>
-                  <td>{fmtTime(f.synced_at)}</td>
-                </tr>
-              ))}
-              {files.length === 0 && <tr><td colSpan="5" className="muted">暂无记录</td></tr>}
-            </tbody>
-          </table>
-          <table style={tab === 'pending' ? undefined : { display: 'none' }}>
-            <thead><tr><th>封面</th><th>相机上的文件</th></tr></thead>
-            <tbody>
-              {pending.map((p, i) => <tr key={p} onClick={() => openPreview(i)} title="点击预览"><td><Thumb src={`/api/thumb?path=${encodeURIComponent(p)}`} name={p.split('/').pop()} /></td><td>{p}</td></tr>)}
-              {pending.length === 0 && <tr><td colSpan="2" className="muted">没有待备份文件</td></tr>}
-            </tbody>
-          </table>
-        </>
+        <table>
+          <thead><tr><th>封面</th><th>相机上的文件</th></tr></thead>
+          <tbody>
+            {shown.map((p, i) => <tr key={p} onClick={() => openPreview(i)} title="点击预览"><td><Thumb src={`/api/thumb?path=${encodeURIComponent(p)}`} name={p.split('/').pop()} /></td><td>{p}</td></tr>)}
+            {shown.length === 0 && <tr><td colSpan="2" className="muted">没有待备份文件</td></tr>}
+          </tbody>
+        </table>
+      )}
+      {shown.length < currentList.length && (
+        <div ref={sentinelRef} className="muted" style={{ padding: '10px 0', textAlign: 'center' }}>
+          加载更多…
+        </div>
       )}
       {preview && (
         <PreviewModal

@@ -34,14 +34,19 @@ class CanonCamera:
         self.base = f"http://{ip}:{port}"
         self.timeout = timeout
 
-    async def _get(self, path: str, retries: int = 0, timeout=None, **kwargs) -> httpx.Response:
+    async def _get(self, path: str, retries: int = 0, timeout=None, client: httpx.AsyncClient | None = None, **kwargs) -> httpx.Response:
         last_err: Exception | None = None
+        url = f"{self.base}{path}"
         for attempt in range(retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=timeout or self.timeout) as client:
-                    resp = await client.get(f"{self.base}{path}", **kwargs)
-                    resp.raise_for_status()
-                    return resp
+                if client is not None:
+                    # 复用调用方传入的连接（事件长轮询等场景）
+                    resp = await client.get(url, timeout=timeout or self.timeout, **kwargs)
+                else:
+                    async with httpx.AsyncClient(timeout=timeout or self.timeout) as c:
+                        resp = await c.get(url, **kwargs)
+                resp.raise_for_status()
+                return resp
             except httpx.HTTPStatusError as e:
                 if e.response.status_code < 500:
                     raise
@@ -88,14 +93,17 @@ class CanonCamera:
         resp = await self._get("/ccapi/ver110/devicestatus/storage")
         return resp.json()
 
-    async def event_poll(self) -> list[dict]:
+    async def event_poll(self, client: httpx.AsyncClient | None = None) -> dict:
         """事件轮询：长连接等待相机事件（新文件/文件删除等）。
 
         无事件时相机保持连接约 60s 后返回空响应；不支持事件轮询的相机返回 404。
+        传入共享 client 复用 TCP 连接——相机对每次新建连接的轮询都立即返回空响应，
+        只有连接复用时长轮询才会真正挂起等待事件。
         """
         try:
             resp = await self._get(
                 EVENT_POLL_URL,
+                client=client,
                 # httpx.Timeout 要求四个参数全给或带默认值，缺 write/pool 会抛 ValueError
                 timeout=httpx.Timeout(
                     connect=self.timeout, read=EVENT_POLL_READ_TIMEOUT,
@@ -107,8 +115,10 @@ class CanonCamera:
                 raise EventPollUnsupported("相机不支持事件轮询")
             raise
         if not resp.text.strip():
-            return []
-        return resp.json().get("events", [])
+            return {}
+        # 响应形如 {"addedcontents": [...], "deletedcontents": [...], "batterychanged": ...}
+        # 注意没有 "events" 键；任一键值非空即代表有变化
+        return {k: v for k, v in resp.json().items() if v}
 
     async def list_dir(self, href: str) -> list[str]:
         resp = await self._get(href)
