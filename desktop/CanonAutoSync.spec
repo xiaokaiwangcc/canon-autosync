@@ -17,8 +17,19 @@ IS_WIN = platform.system() == "Windows"
 # 前端构建产物 → 后端静态托管目录（main.py 的 STATIC_DIR = app/static）
 datas = [(str(ROOT / "frontend" / "dist"), "app/static")]
 
+# 视频缩略图依赖 imageio-ffmpeg：收集其自带的 ffmpeg 静态二进制到包内同路径，
+# 运行时 get_ffmpeg_exe() 在打包环境下也能找到（只收集包内自带，不依赖打包机系统 ffmpeg）
+try:
+    import imageio_ffmpeg
+    _ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe())
+    _pkg = Path(imageio_ffmpeg.__file__).resolve().parent
+    if _ffmpeg.exists() and _pkg in _ffmpeg.resolve().parents:
+        datas += [(str(_ffmpeg), "imageio_ffmpeg/binaries")]
+except Exception:
+    pass
+
 # entry.py 中 run_server 为函数级导入，PyInstaller 静态分析不可见，需显式声明
-hiddenimports = ["app.main", "app.ccapi", "app.config", "app.state", "app.sync"]
+hiddenimports = ["app.main", "app.ccapi", "app.config", "app.state", "app.sync", "imageio_ffmpeg", "rawpy"]
 if IS_WIN:
     hiddenimports += ["clr"]  # pywebview Windows 后端基于 pythonnet
 

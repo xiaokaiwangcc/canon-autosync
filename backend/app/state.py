@@ -144,6 +144,11 @@ class State:
         with self._lock:
             return list(self._data["synced"].items())
 
+    def snapshot_ignored(self) -> list:
+        """返回忽略名单快照，供线程池中的路由安全遍历。"""
+        with self._lock:
+            return list(self._data["ignored"])
+
     @property
     def synced(self) -> dict:
         return self._data["synced"]

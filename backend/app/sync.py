@@ -102,9 +102,9 @@ class SyncEngine:
 
         CCAPI 原始响应与前端展示/健康检查字段不同名，且新旧固件格式不同，在此统一转换：
         - 旧固件：battery 返回 {"battery": "0"/"1"/"2"/"AC"}，temperature 返回 {"temperature": "normal"}；
-        - 新固件（EOS R5/R6/R7 等）：battery 返回 {"level": "full"...", "name": "LP-E6NH", ...}，
-          temperature 返回 {"status": "normal"}。
-        归一化为前端语义档位 level/status 格式。
+        - 新固件（EOS R5/R6/R7 等）：battery 返回 {"level": "high"/"middle"/"low"/"empty" 或 "full"/"partial",
+          "name": "LP-E6NH", ...}（实测 R7 固件 1.8.0 返回 level=high），temperature 返回 {"status": "normal"}。
+        归一化为前端语义档位 level/status 格式；CCAPI 只有档位无精确百分比，percentage 为档位估算值。
         """
         cam = self.camera()
         if not self._device_fetched:
@@ -119,15 +119,28 @@ class SyncEngine:
         self._info_refreshed_at = now
         try:
             raw = await cam.battery()
-            # 新旧固件电量键不同：新固件 level（full/partial/low/empty），旧固件 battery（0/1/2/AC）
+            # 新旧固件电量键不同：新固件 level（high/middle/low/empty 或 full/partial），旧固件 battery（0/1/2/AC）
             level_map = {
                 "0": "empty", "1": "middle", "2": "high", "AC": "ac",
-                "full": "high", "partial": "middle", "low": "low", "empty": "empty",
+                "high": "high", "full": "high",
+                "middle": "middle", "partial": "middle",
+                "low": "low", "empty": "empty",
+            }
+            # 档位 → 估算百分比（CCAPI 无精确电量，供前端进度条展示）
+            pct_map = {
+                "0": 0, "1": 50, "2": 75, "AC": 100,
+                "high": 75, "full": 100,
+                "middle": 50, "partial": 50,
+                "low": 25, "empty": 0,
             }
             raw_level = raw.get("level") or raw.get("battery")
+            level = level_map.get(raw_level, "unknown")
+            if level == "unknown":
+                log.warning("未识别的电池档位 %r，原始响应：%s", raw_level, raw)
             self.camera_info["battery"] = {
-                "level": level_map.get(raw_level, "unknown"),
-                "name": raw.get("name"),  # 新固件携带电池型号（如 LP-E6NH），前端展示用
+                "level": level,
+                "percentage": pct_map.get(raw_level) if raw_level is not None else None,
+                "name": raw.get("name"),  # 携带电池型号（如 LP-E6NH），前端展示用
             }
         except Exception:
             self.camera_info["battery"] = None

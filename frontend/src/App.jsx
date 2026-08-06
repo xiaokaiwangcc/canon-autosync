@@ -156,7 +156,7 @@ function Sidebar({ page, onNavigate, status }) {
           </div>
         </div>
         <div className="foot-item muted" style={{ marginTop: 8 }}>
-          自动同步{status.auto_sync ? '已开启' : '已关闭'} · {status.sync_mode === 'event' ? '秒级同步' : '定时扫描模式'}
+          自动同步{status.auto_sync ? '已开启' : '已关闭'} · {status.sync_mode === 'event' ? '秒级同步' : '定时扫描'}
         </div>
         {status.version && <div className="app-version">v{status.version}</div>}
       </div>
@@ -445,7 +445,8 @@ const ICON_CHECK_CIRCLE = (
 function RecentTransfers() {
   const [items, setItems] = useState([])
   useEffect(() => {
-    const load = () => api.files(0, 6).then((f) => setItems(f.items)).catch(() => {})
+    // 过滤掉文件已从备份目录删除的记录，只展示仍可查看的最近传输
+    const load = () => api.files(0, 6).then((f) => setItems(f.items.filter((x) => x.exists !== false))).catch(() => {})
     load()
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
@@ -651,11 +652,13 @@ function ConfigForm({ version }) {
 
 const IMAGE_EXTS = ['jpg', 'jpeg', 'heif', 'hif', 'png', 'webp', 'gif', 'bmp']
 const VIDEO_EXTS = ['mp4', 'mov']
+const RAW_EXTS = ['cr3', 'cr2', 'raw', 'nef', 'arw', 'dng']
 
 function PreviewModal({ items, index, onNavigate, onClose }) {
-  const { src, name } = items[index]
+  const { src, name, missing = false, kind = 'preview' } = items[index]
   const ext = (name.split('.').pop() || '').toLowerCase()
-  const isImage = IMAGE_EXTS.includes(ext)
+  // RAW 走后端提取的内嵌 JPEG（待备份为相机缩略图），同样用 img 展示
+  const isImage = IMAGE_EXTS.includes(ext) || RAW_EXTS.includes(ext)
   const isVideo = VIDEO_EXTS.includes(ext)
   const [failedSrc, setFailedSrc] = useState(null)
   const failed = failedSrc === src
@@ -680,17 +683,21 @@ function PreviewModal({ items, index, onNavigate, onClose }) {
   return (
     <div className="modal" onClick={onClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
+        {/* 视频时标题栏上移，避开播放器控制条 */}
+        <div className={`modal-head${isVideo ? ' video' : ''}`}>
           <span className="modal-title">{name.split('/').pop()} · {index + 1}/{items.length}</span>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
         <div className="modal-body">
-          {isImage && !failed && (
+          {isImage && !failed && !missing && (
             <img key={src} src={src} alt={name} onError={() => setFailedSrc(src)} />
           )}
-          {isVideo && <video key={src} src={src} controls autoPlay />}
-          {(failed || (!isImage && !isVideo)) && (
-            <div className="muted">该格式暂不支持预览（{ext || '未知'}）</div>
+          {isVideo && !missing && <video key={src} src={src} controls autoPlay />}
+          {missing && <div className="muted">文件已从备份目录删除</div>}
+          {(failed || (!isImage && !isVideo)) && !missing && (
+            <div className="muted">
+              {kind === 'preview' ? '文件不存在或已删除' : `该格式暂不支持预览（${ext || '未知'}）`}
+            </div>
           )}
           {hasPrev && <button className="modal-nav prev" onClick={nav(-1)}>‹</button>}
           {hasNext && <button className="modal-nav next" onClick={nav(1)}>›</button>}
@@ -699,8 +706,6 @@ function PreviewModal({ items, index, onNavigate, onClose }) {
     </div>
   )
 }
-
-const RAW_EXTS = ['cr3', 'cr2', 'raw', 'nef', 'arw', 'dng']
 
 const IconList = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>
@@ -748,6 +753,7 @@ function FileList() {
   const [pending, setPending] = useState([])
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState(null)
+  const [opOpen, setOpOpen] = useState(false) // 操作下拉展开状态
   const [loaded, setLoaded] = useState(false)
   // 缩略图分批渲染：首屏 50 张，滚到底部哨兵后再加载下一批，避免一次性请求 200 张
   const [visible, setVisible] = useState(50)
@@ -755,6 +761,10 @@ function FileList() {
 
   const rawList = tab === 'synced' ? files : pending
   const q = query.trim().toLowerCase()
+  // 已从备份目录删除的记录数（NAS 直接删除）与手动删除留下的忽略记录数（应用内删除）
+  const missingCount = files.filter((f) => f.exists === false).length
+  const ignoredCount = pending.filter((p) => p.ignored).length
+  const hasOps = tab === 'synced' ? missingCount > 0 : ignoredCount > 0
   const currentList = q
     ? rawList.filter((x) => x.path.split('/').pop().toLowerCase().includes(q))
     : rawList
@@ -767,7 +777,13 @@ function FileList() {
       const src = isP
         ? `/api/thumb?path=${encodeURIComponent(x.path)}`
         : `/api/preview?path=${encodeURIComponent(x.dest)}`
-      return { src, name: x.path.split('/').pop() }
+      return {
+        src,
+        name: x.path.split('/').pop(),
+        // 已同步但文件被从备份目录删除：模态框内直接提示，不再发预览请求
+        missing: !isP && x.exists === false,
+        kind: isP ? 'thumb' : 'preview',
+      }
     })
     setPreview({ list, index: idx })
   }
@@ -788,10 +804,14 @@ function FileList() {
     return () => clearInterval(t)
   }, [])
 
-  const deleteFile = async (e, camPath) => {
+  const deleteFile = async (e, camPath, missing = false) => {
     e.stopPropagation()
     const name = camPath.split('/').pop()
-    if (!window.confirm(`删除备份「${name}」？NAS 上的文件将被一并删除，且无法恢复。`)) return
+    // 文件已不在备份目录：仅移除记录（后端同时加入忽略名单，相机上的原文件不再自动回传）
+    const confirmMsg = missing
+      ? `移除记录「${name}」？文件已从备份目录删除，移除后相机上的原文件将不再自动备份。`
+      : `删除备份「${name}」？NAS 上的文件将被一并删除，且无法恢复。`
+    if (!window.confirm(confirmMsg)) return
     try {
       await api.deleteFile(camPath)
       setFiles((fs) => fs.filter((f) => f.path !== camPath))
@@ -799,6 +819,38 @@ function FileList() {
       setError('删除失败，请稍后重试')
     }
   }
+
+  // 一键移除全部已删除记录：仅清理 dest 已不存在的，存在的备份不受影响
+  const cleanupMissing = async () => {
+    if (!window.confirm(`移除全部 ${missingCount} 条已删除记录？相机上的对应原文件将不再自动备份。`)) return
+    try {
+      await api.cleanupMissing()
+      setFiles((fs) => fs.filter((f) => f.exists !== false))
+    } catch (err) {
+      setError(`清理失败：${err.message}`)
+    }
+  }
+
+  // 批量清除手动删除留下的忽略记录：相机上仍存在的原文件将重新排队备份
+  const clearIgnored = async () => {
+    if (!window.confirm(`清除全部 ${ignoredCount} 条手动删除记录？相机上仍存在的原文件将重新进入待备份并自动同步。`)) return
+    try {
+      await api.clearIgnored()
+      setPending((ps) => ps.map((p) => ({ ...p, ignored: false })))
+    } catch (err) {
+      setError(`清除失败：${err.message}`)
+    }
+  }
+
+  // 点击下拉外部收起；切换 tab 时收起（下拉内容随 tab 变化）
+  useEffect(() => {
+    const close = (e) => {
+      if (!e.target.closest('.op-menu')) setOpOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [])
+  useEffect(() => setOpOpen(false), [tab])
 
   const restoreFile = async (e, camPath) => {
     e.stopPropagation()
@@ -848,6 +900,28 @@ function FileList() {
               placeholder="搜索文件名…"
             />
           </div>
+          {hasOps && (
+            <div className="op-menu">
+              <button className="op-btn" onClick={() => setOpOpen((o) => !o)}>
+                操作 <span className="op-caret">▾</span>
+              </button>
+              {opOpen && (
+                <div className="op-dropdown">
+                  {tab === 'synced' ? (
+                    <button onClick={() => { setOpOpen(false); cleanupMissing() }}>
+                      移除已删除记录 ({missingCount})
+                      <span className="op-desc">文件从备份目录被直接删除，仅剩同步记录。移除同步记录后将清除前端已删除图片占位</span>
+                    </button>
+                  ) : (
+                    <button onClick={() => { setOpOpen(false); clearIgnored() }}>
+                      清除忽略记录 ({ignoredCount})
+                      <span className="op-desc">手动删除备份留下的标记，相机上的原文件将重新备份</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="view-toggle">
             <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title="图标模式"><IconGrid /></button>
             <button className={view === 'list' ? 'active' : 'ghost'} onClick={() => setView('list')} title="列表模式"><IconList /></button>
@@ -864,33 +938,42 @@ function FileList() {
             const isPending = tab === 'pending'
             const name = x.path.split('/').pop()
             const ignored = isPending && x.ignored
+            // 已同步但文件被从备份目录删除：显示占位与「已删除」标记，不再请求缩略图
+            const missing = !isPending && x.exists === false
             return (
               <div
-                className={`photo-card${ignored ? ' ignored' : ''}`}
+                className={`photo-card${ignored ? ' ignored' : ''}${missing ? ' missing' : ''}`}
                 key={x.path}
                 onClick={() => openPreview(i)}
-                title={ignored ? `${x.path}\n已忽略，不会自动备份` : x.path}
+                title={missing ? `${x.path}\n文件已从备份目录删除` : ignored ? `${x.path}\n已忽略，不会自动备份` : x.path}
               >
                 {!isPending && (
                   <button
                     className="photo-del"
-                    title="删除备份"
-                    onClick={(e) => deleteFile(e, x.path)}
+                    title={missing ? '移除记录' : '删除备份'}
+                    onClick={(e) => deleteFile(e, x.path, missing)}
                   >
                     <IconTrash />
                   </button>
                 )}
                 {ignored && <span className="ignored-tag">已忽略</span>}
-                <Thumb
-                  src={isPending
-                    ? `/api/thumb?path=${encodeURIComponent(x.path)}`
-                    : `/api/preview?path=${encodeURIComponent(x.dest)}&size=480`}
-                  name={name}
-                />
+                {missing && <span className="missing-tag">已删除</span>}
+                {missing ? (
+                  <div className="thumb thumb-empty thumb-image" title="文件已从备份目录删除" />
+                ) : (
+                  <Thumb
+                    src={isPending
+                      ? `/api/thumb?path=${encodeURIComponent(x.path)}`
+                      : `/api/preview?path=${encodeURIComponent(x.dest)}&size=480`}
+                    name={name}
+                  />
+                )}
                 <div className="photo-foot">
                   <span className="photo-name">{name}</span>
                   {ignored ? (
                     <button className="restore-btn" onClick={(e) => restoreFile(e, x.path)}>恢复备份</button>
+                  ) : missing ? (
+                    <span className="photo-size"></span>
                   ) : (
                     <span className="photo-size">{isPending ? x.path.split('/').slice(-2)[0] : fmtSize(x.size)}</span>
                   )}
@@ -909,20 +992,33 @@ function FileList() {
             <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th><th></th></tr>
           </thead>
           <tbody>
-            {shown.map((f, i) => (
-              <tr key={f.path} onClick={() => openPreview(i)} title="点击预览">
-                <td><Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} /></td>
-                <td>{f.path.split('/').pop()}</td>
-                <td>{fmtSize(f.size)}</td>
-                <td>{f.dest}</td>
-                <td>{fmtTime(f.synced_at)}</td>
-                <td>
-                  <button className="row-del" title="删除备份" onClick={(e) => deleteFile(e, f.path)}>
-                    <IconTrash />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {shown.map((f, i) => {
+              // 已同步但文件被从备份目录删除：封面显示占位，行内标记「已删除」
+              const missing = f.exists === false
+              return (
+                <tr key={f.path} onClick={() => openPreview(i)} title={missing ? '文件已从备份目录删除，点击预览' : '点击预览'}>
+                  <td>
+                    {missing ? (
+                      <div className="thumb thumb-empty thumb-image" title="文件已从备份目录删除" />
+                    ) : (
+                      <Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} />
+                    )}
+                  </td>
+                  <td>
+                    {f.path.split('/').pop()}
+                    {missing && <span className="tag" style={{ marginLeft: 8 }}>已删除</span>}
+                  </td>
+                  <td>{fmtSize(f.size)}</td>
+                  <td>{f.dest}</td>
+                  <td>{fmtTime(f.synced_at)}</td>
+                  <td>
+                    <button className="row-del" title={missing ? '移除记录' : '删除备份'} onClick={(e) => deleteFile(e, f.path, missing)}>
+                      <IconTrash />
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
             {shown.length === 0 && <tr><td colSpan="6" className="muted">暂无记录</td></tr>}
           </tbody>
         </table>

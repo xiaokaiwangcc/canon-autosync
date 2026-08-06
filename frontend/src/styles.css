@@ -214,6 +214,7 @@ tr:hover td { background: #f6f7f9; }
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
+.modal-head.video { bottom: 76px; }
 .modal-title {
   font-size: 13px; font-weight: 600; color: #fff;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -379,6 +380,29 @@ tr:hover td { background: #f6f7f9; }
 }
 .seg-tabs button.active .seg-count { background: rgba(22, 163, 74, .12); color: #16a34a; }
 .files-tools { display: flex; align-items: center; gap: 8px; }
+
+/* ---- 操作下拉（批量删除，按 tab 区分删除来源） ---- */
+.op-menu { position: relative; }
+.op-btn {
+  height: 26px; padding: 0 10px; display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; color: #1f2430;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; white-space: nowrap;
+}
+.op-btn:hover { background: #f5f6f8; border-color: #d8dbe1; }
+.op-caret { font-size: 9px; opacity: .7; transform: translateY(-1px); }
+.op-dropdown {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  min-width: 220px; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .12); padding: 4px;
+}
+.op-dropdown button {
+  display: block; width: 100%; text-align: left; padding: 7px 10px;
+  font-size: 12.5px; font-weight: 600; color: #1f2430; border-radius: 7px; line-height: 1.35;
+  background: transparent;
+}
+.op-dropdown button:hover { background: #f3f4f6; }
+.op-dropdown button:hover .op-desc { color: #6b7280; }
+.op-desc { display: block; font-size: 11px; font-weight: 400; color: #9ca3af; margin-top: 1px; }
 .search-box {
   display: flex; align-items: center; gap: 7px;
   background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px;
@@ -451,6 +475,16 @@ tr:hover td { background: #f6f7f9; }
   flex-shrink: 0;
 }
 .restore-btn:hover { background: #2563eb; color: #fff; border-color: #2563eb; }
+
+/* ---- 已删除（备份目录中文件被手动移除，仅剩同步记录） ---- */
+.photo-card.missing .thumb-empty { background-color: #f8fafc; }
+.photo-card.missing .photo-name { color: #9ca3af; }
+.missing-tag {
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 99px;
+  background: rgba(255, 255, 255, .92); color: #6b7280;
+  border: 1px solid #e5e7eb;
+}
 
 /* ---- 设置页 ---- */
 .settings-form { max-width: none; }

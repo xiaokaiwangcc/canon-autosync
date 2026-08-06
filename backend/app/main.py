@@ -4,7 +4,9 @@ import hashlib
 import io
 import logging
 import os
+import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import httpx
@@ -104,7 +106,20 @@ def list_synced(offset: int = 0, limit: int = 100):
     items.sort(key=lambda kv: kv[1]["synced_at"], reverse=True)
     total = len(items)
     page = items[offset : offset + limit]
-    return {"total": total, "items": [{"path": p, **meta} for p, meta in page]}
+    # 校验 dest 是否真实存在：用户在备份目录手动删文件后记录仍在，
+    # 前端据此标记「已删除」而非误报缩略图加载失败（每页最多 200 条 stat，开销可忽略）
+    # NAS 掉线/未挂载时 is_file 全为 False，会把正常记录误标「已删除」；
+    # 根目录不可达时跳过存在性校验（exists=None，前端按未知处理不误标）
+    nas_ok = Path(config.nas_path).is_dir()
+    result = []
+    for path, meta in page:
+        dest = meta.get("dest")
+        result.append({
+            "path": path,
+            **meta,
+            "exists": (bool(dest) and Path(dest).is_file()) if nas_ok else None,
+        })
+    return {"total": total, "items": result}
 
 
 @app.delete("/api/files")
@@ -135,6 +150,50 @@ def restore_ignored(path: str = Query(...)):
     restored = state.unignore(path)
     engine.recount_pending()
     return {"ok": restored}
+
+
+@app.post("/api/files/cleanup-missing")
+async def cleanup_missing():
+    """批量清理已从备份目录删除的同步记录：仅移除 dest 已不存在的记录，
+    存在的文件不受影响；与单个删除一致，相机上的原文件加入忽略名单不再自动传回。
+    """
+    # NAS 掉线/未挂载时 is_file 全为 False，会误清全部记录并加入忽略名单，先检查根目录可达
+    if not Path(config.nas_path).is_dir():
+        raise HTTPException(503, "备份目录不可访问，请检查 NAS 挂载状态")
+
+    def _scan_and_remove() -> int:
+        removed = 0
+        for path, meta in state.snapshot_synced():
+            dest = meta.get("dest")
+            if dest and not Path(dest).is_file():
+                state.remove_synced(path)
+                state.ignore(path)
+                removed += 1
+        return removed
+
+    # 网络挂载盘上逐条 stat 是同步网络 IO，放线程池执行避免阻塞事件循环
+    removed = await asyncio.to_thread(_scan_and_remove)
+    if removed:
+        await state.flush(force=True)  # 路由线程外无事件循环调度，立即落盘
+        engine.recount_pending()
+        log.info("已批量清理 %d 条已删除的备份记录", removed)
+    return {"removed": removed}
+
+
+@app.post("/api/files/clear-ignored")
+async def clear_ignored():
+    """批量清除手动删除备份留下的忽略记录（等于批量恢复备份）：
+    相机上仍存在的原文件会重新进入待备份列表并自动同步。
+    """
+    cleared = 0
+    for path in state.snapshot_ignored():
+        if state.unignore(path):
+            cleared += 1
+    if cleared:
+        await state.flush(force=True)
+        engine.recount_pending()
+        log.info("已批量清除 %d 条忽略记录", cleared)
+    return {"cleared": cleared}
 
 
 @app.get("/api/pending")
@@ -216,10 +275,58 @@ def _write_thumb_cache(cache_file: Path, content: bytes) -> None:
         pass
 
 
+# Pillow 无法解码视频，mp4/mov 缩略图改用 ffmpeg 提取首帧（imageio-ffmpeg 自带跨平台静态二进制）
+_VIDEO_EXTS = {".mp4", ".mov"}
+# 相机 RAW 文件 Pillow 同样无法解码，但文件内嵌相机生成的 JPEG 预览图，用 rawpy（libraw）提取
+_RAW_EXTS = {".cr3", ".cr2", ".raw", ".nef", ".arw", ".dng"}
+# ffmpeg 解码首帧是 CPU 密集操作：限制并发，避免一次加载多个视频时打满 CPU
+_video_thumb_sem = threading.Semaphore(2)
+
+
+def _raw_jpeg(target: Path) -> bytes | None:
+    """提取 RAW 文件内嵌的 JPEG 预览图；rawpy 未安装或提取失败返回 None。"""
+    try:
+        import rawpy
+    except ImportError:
+        return None
+    try:
+        with rawpy.imread(str(target)) as raw:
+            thumb = raw.extract_thumb()
+            if thumb.format == rawpy.ThumbFormat.JPEG:
+                return thumb.data
+    except Exception:
+        return None
+    return None
+
+
+def _video_thumb(target: Path, size: int) -> bytes:
+    """用 ffmpeg 提取视频首帧生成 JPEG 缩略图。"""
+    import imageio_ffmpeg
+
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    # PyInstaller 打包后二进制可能丢失执行权限（macOS 常见），确保可执行
+    if not os.access(exe, os.X_OK):
+        os.chmod(exe, 0o755)
+    # -ss 0.1 跳过片头黑帧；scale 在 size 盒子内等比缩放、只缩小不放大（与 Pillow thumbnail 一致）
+    cmd = [
+        exe, "-nostdin", "-loglevel", "error",
+        "-ss", "0.1", "-i", str(target),
+        "-frames:v", "1", "-an",
+        "-vf", f"scale='min({size},iw)':'min({size},ih)':force_original_aspect_ratio=decrease",
+        "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "-",
+    ]
+    with _video_thumb_sem:
+        proc = subprocess.run(cmd, capture_output=True, timeout=30)
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError(f"ffmpeg 提取视频帧失败: {proc.stderr.decode(errors='replace')[-200:]}")
+    return proc.stdout
+
+
 @app.get("/api/preview")
 def preview(path: str = Query(...), size: int | None = None):
     """预览已备份到 NAS 的文件：仅允许 nas_path 目录内的文件，防目录穿越。
-    带 size 时用 Pillow 生成缩略图（结果磁盘缓存，避免每次请求都解码原图），否则返回原图。
+    带 size 时生成缩略图（图片用 Pillow，视频用 ffmpeg 提取首帧，RAW 提取内嵌 JPEG 预览；
+    结果磁盘缓存，避免每次请求都解码原文件），否则返回原文件（RAW 返回内嵌 JPEG）。
     """
     root = Path(config.nas_path).resolve()
     target = Path(path).resolve()
@@ -228,22 +335,32 @@ def preview(path: str = Query(...), size: int | None = None):
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
     if not size:
+        # RAW 本体浏览器无法渲染，直出内嵌 JPEG；提取失败时退回原文件
+        if target.suffix.lower() in _RAW_EXTS:
+            raw_jpeg = _raw_jpeg(target)
+            if raw_jpeg:
+                return Response(raw_jpeg, media_type="image/jpeg", headers=_CACHE_HEADERS)
         return FileResponse(target, headers=_CACHE_HEADERS)
     cache_file = _thumb_cache_file(path, size, int(target.stat().st_mtime))
     if cache_file.is_file():
         return FileResponse(cache_file, headers=_CACHE_HEADERS)
     try:
-        from PIL import Image
+        if target.suffix.lower() in _VIDEO_EXTS:
+            content = _video_thumb(target, size)
+        else:
+            from PIL import Image
 
-        img = Image.open(target)
-        img.thumbnail((size, size))
-        buf = io.BytesIO()
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        img.save(buf, "JPEG", quality=80)
+            # RAW 文件先提取内嵌 JPEG 再缩放，其余直接 Pillow 解码
+            raw_jpeg = _raw_jpeg(target) if target.suffix.lower() in _RAW_EXTS else None
+            img = Image.open(io.BytesIO(raw_jpeg)) if raw_jpeg else Image.open(target)
+            img.thumbnail((size, size))
+            buf = io.BytesIO()
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            img.save(buf, "JPEG", quality=80)
+            content = buf.getvalue()
     except Exception:
         raise HTTPException(415, "该格式不支持缩略图")
-    content = buf.getvalue()
     _write_thumb_cache(cache_file, content)
     return Response(content, media_type="image/jpeg", headers=_CACHE_HEADERS)
 
