@@ -79,7 +79,7 @@ jobs:
           path: fpk/canon-autosync/*.fpk
           if-no-files-found: error
 
-      - name: 创建 Release（仅 tag 构建发布）
+      - name: 创建/更新 Release（仅 tag 构建发布；Release 已存在时直接补传资产）
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -89,4 +89,6 @@ jobs:
           echo "发布 $TAG_NAME: $FPK"
           gh release create "$TAG_NAME" "$FPK" \
             --generate-notes \
-            --title "canon-autosync $TAG_NAME"
+            --title "canon-autosync $TAG_NAME" 2>/dev/null || true
+          # 桌面工作流可能已兜底创建 Release，已存在时忽略创建错误、直接补传 fpk
+          gh release upload "$TAG_NAME" "$FPK" --clobber
