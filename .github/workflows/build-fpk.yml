@@ -66,10 +66,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add fpk/canon-autosync/manifest
-          if ! git diff --cached --quiet; then
-            git commit -m "ci: 应用版本号自增"
-            git push
+          # 并发构建可能同时自增 manifest：先同步远端避免 push 被拒；
+          # 仍冲突（双方都改了 manifest）时放弃本次自增，不阻塞构建
+          if git pull --rebase origin main 2>/dev/null; then
+            git add fpk/canon-autosync/manifest
+            if ! git diff --cached --quiet; then
+              git commit -m "ci: 应用版本号自增"
+              git push || true
+            fi
+          else
+            echo "并发自增冲突，跳过本次版本号提交"
           fi
 
       - name: 上传构建产物
