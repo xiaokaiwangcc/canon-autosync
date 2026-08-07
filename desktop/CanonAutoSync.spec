@@ -17,13 +17,23 @@ IS_WIN = platform.system() == "Windows"
 # 前端构建产物 → 后端静态托管目录（main.py 的 STATIC_DIR = app/static）
 datas = [(str(ROOT / "frontend" / "dist"), "app/static")]
 
+# entry.py 中 run_server 为函数级导入，PyInstaller 静态分析不可见，需显式声明
+hiddenimports = ["app.main", "app.ccapi", "app.config", "app.state", "app.sync", "rawpy"]
+if IS_WIN:
+    hiddenimports += ["clr"]  # pywebview Windows 后端基于 pythonnet
+
 # 视频缩略图依赖 ffmpeg：Windows 构建优先收集 CI 裁剪编译的最小化二进制
 # （desktop/ffmpeg/ffmpeg.exe，由 build-desktop.yml 编译并下载）；不存在时（macOS/本地构建）
 # 收集 imageio-ffmpeg 自带完整静态二进制，运行时 get_ffmpeg_exe() 在打包环境下也能找到
 _trim_ffmpeg = ROOT / "desktop" / "ffmpeg" / "ffmpeg.exe"
+excludes = []
 if _trim_ffmpeg.is_file():
     datas += [(str(_trim_ffmpeg), "ffmpeg")]
+    # 排除 imageio_ffmpeg：其 PyInstaller hook 会自动收集自带完整版二进制（70-80MB）导致重复打包；
+    # 裁剪版已覆盖视频首帧提取所需能力，运行时直接使用，无需回退完整版
+    excludes += ["imageio_ffmpeg"]
 else:
+    hiddenimports += ["imageio_ffmpeg"]
     try:
         import imageio_ffmpeg
 
@@ -34,11 +44,6 @@ else:
     except Exception:
         pass
 
-# entry.py 中 run_server 为函数级导入，PyInstaller 静态分析不可见，需显式声明
-hiddenimports = ["app.main", "app.ccapi", "app.config", "app.state", "app.sync", "imageio_ffmpeg", "rawpy"]
-if IS_WIN:
-    hiddenimports += ["clr"]  # pywebview Windows 后端基于 pythonnet
-
 a = Analysis(
     [str(ROOT / "desktop" / "entry.py")],
     pathex=[str(ROOT / "backend")],
@@ -47,7 +52,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
 )
 

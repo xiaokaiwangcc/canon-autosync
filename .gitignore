@@ -9,3 +9,4 @@ desktop/icons/
 .DS_Store
 *.fpk
 fpk/canon-autosync/app/backend/
+desktop/ffmpeg/
