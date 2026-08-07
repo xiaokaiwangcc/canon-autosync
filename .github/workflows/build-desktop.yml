@@ -9,8 +9,46 @@ permissions:
   contents: write
 
 jobs:
+  # 裁剪编译最小化 ffmpeg（仅视频首帧提取所需能力），替代 imageio-ffmpeg 的完整二进制以缩小包体积
+  build-ffmpeg-win:
+    name: 编译精简 ffmpeg (Windows)
+    runs-on: ubuntu-latest
+    steps:
+      - name: 安装 mingw-w64 交叉编译工具链
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 nasm
+
+      - name: 下载 ffmpeg 源码
+        run: |
+          curl -fsSL -o ffmpeg.tar.gz https://ffmpeg.org/releases/ffmpeg-8.1.tar.gz
+          tar xzf ffmpeg.tar.gz
+
+      - name: 配置裁剪编译（仅 mp4/mov 解封装 + H.264/HEVC 解码 + JPEG 输出）
+        working-directory: ffmpeg-8.1
+        run: |
+          ./configure --target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- \
+            --enable-cross-compile --disable-everything \
+            --enable-decoder=h264,hevc,mpeg4,aac,mp3 --enable-demuxer=mov \
+            --enable-parser=h264,hevc,mpeg4video,aac,mpegaudio \
+            --enable-encoder=mjpeg --enable-muxer=image2,image2pipe \
+            --enable-protocol=file,pipe --enable-filter=scale --enable-swscale \
+            --enable-small --disable-ffplay --disable-ffprobe --disable-doc \
+            --disable-debug --disable-network --disable-avdevice \
+            --disable-swresample --disable-autodetect --disable-iconv --disable-zlib \
+            --disable-bzlib --disable-lzma --disable-schannel --disable-sdl2
+
+      - name: 编译
+        working-directory: ffmpeg-8.1
+        run: make -j$(nproc)
+
+      - name: 上传 ffmpeg.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: ffmpeg-8.1/ffmpeg.exe
+
   build:
     name: ${{ matrix.os }}
+    needs: build-ffmpeg-win
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +84,13 @@ jobs:
 
       - name: 生成应用图标（ico/icns）
         run: python desktop/make_icons.py
+
+      - name: 下载精简 ffmpeg（Windows）
+        if: runner.os == 'Windows'
+        uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: desktop/ffmpeg
 
       - name: 写入版本号（仅 tag 构建）
         if: startsWith(github.ref, 'refs/tags/')

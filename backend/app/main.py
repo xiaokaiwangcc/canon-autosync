@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -275,12 +276,29 @@ def _write_thumb_cache(cache_file: Path, content: bytes) -> None:
         pass
 
 
-# Pillow 无法解码视频，mp4/mov 缩略图改用 ffmpeg 提取首帧（imageio-ffmpeg 自带跨平台静态二进制）
+# Pillow 无法解码视频，mp4/mov 缩略图改用 ffmpeg 提取首帧
+# （打包环境优先用 CI 裁剪编译的最小化 ffmpeg，其余情况用 imageio-ffmpeg 自带完整静态二进制）
 _VIDEO_EXTS = {".mp4", ".mov"}
 # 相机 RAW 文件 Pillow 同样无法解码，但文件内嵌相机生成的 JPEG 预览图，用 rawpy（libraw）提取
 _RAW_EXTS = {".cr3", ".cr2", ".raw", ".nef", ".arw", ".dng"}
 # ffmpeg 解码首帧是 CPU 密集操作：限制并发，避免一次加载多个视频时打满 CPU
 _video_thumb_sem = threading.Semaphore(2)
+
+
+def _ffmpeg_exe() -> str | None:
+    """定位 ffmpeg：优先打包附带的最小化二进制（sys._MEIPASS/ffmpeg/），否则回退 imageio-ffmpeg。"""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        for name in ("ffmpeg.exe", "ffmpeg"):
+            p = Path(base) / "ffmpeg" / name
+            if p.is_file():
+                return str(p)
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
 
 
 def _raw_jpeg(target: Path) -> bytes | None:
@@ -301,9 +319,9 @@ def _raw_jpeg(target: Path) -> bytes | None:
 
 def _video_thumb(target: Path, size: int) -> bytes:
     """用 ffmpeg 提取视频首帧生成 JPEG 缩略图。"""
-    import imageio_ffmpeg
-
-    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    exe = _ffmpeg_exe()
+    if not exe:
+        raise RuntimeError("未找到 ffmpeg，无法生成视频缩略图")
     # PyInstaller 打包后二进制可能丢失执行权限（macOS 常见），确保可执行
     if not os.access(exe, os.X_OK):
         os.chmod(exe, 0o755)
