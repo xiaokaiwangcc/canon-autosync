@@ -102,7 +102,7 @@ DATA_DIR=./data                      # 配置与同步记录存储位置
 
 - **host 网络模式**：相机经 Wi-Fi 接入宿主机网络（如 NAS 发射的 AP 热点），容器需共享宿主机网络栈才能直连相机 IP，故 `docker-compose.yml` 使用 `network_mode: host`，端口固定 8315
 - **数据持久化**：配置/同步记录存于 `DATA_DIR` 卷、照片存于 `BACKUP_DIR` 卷，升级不丢失
-- 多阶段构建：Node 构建前端 → Python 3.12 单容器托管（单端口 8315）
+- 多阶段构建：Node构建前端 → Python 3.12 单容器托管（单端口 8315）
 
 ## 打包飞牛 fnOS 应用（.fpk）
 
