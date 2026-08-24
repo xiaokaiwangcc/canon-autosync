@@ -26,7 +26,7 @@
 3. 相机连接 Wi-Fi 后，在 Wi-Fi 设置 → Camera Control API → 连接，选择对应 Wi-Fi，屏幕出现 `http://<相机IP>:8080/ccapi`
 4. 浏览器打开该地址，确认返回 JSON
 
-注意：**"连接至智能手机"和"遥控(EOS Utility)"模式不会启动 CCAPI HTTP 服务**，必须用激活后出现的 CCAPI 连接选项。R7 文件浏览接口为 `/ccapi/ver130/contents`，客户端已按此实现。
+注意：**"连接至智能手机"和"遥控(EOS Utility)"模式不会启动 CCAPI HTTP 服务**，必须用激活后出现的 CCAPI 连接选项。R7 文件浏览接口为 `/ccapi/ver130/contents`，客户端已按此实现
 
 ## 快速开始（本地开发）
 
