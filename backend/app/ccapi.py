@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -132,7 +133,25 @@ class CanonCamera:
             parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment,
         ))
         resp = await self._get(chunked_href)
-        return resp.json().get("path", [])
+        # kind=chunked 的响应由多个 JSON 对象直接拼接而成，而非一个 JSON 数组。
+        # httpx.Response.json() 只能解析单个对象，会在第二段起报 “Extra data”。
+        decoder = json.JSONDecoder()
+        body = resp.text
+        offset = 0
+        paths: list[str] = []
+        while offset < len(body):
+            while offset < len(body) and body[offset].isspace():
+                offset += 1
+            if offset == len(body):
+                break
+            chunk, offset = decoder.raw_decode(body, offset)
+            if not isinstance(chunk, dict):
+                raise ValueError("相机目录列表格式错误：每个分段必须是 JSON 对象")
+            chunk_paths = chunk.get("path", [])
+            if not isinstance(chunk_paths, list):
+                raise ValueError("相机目录列表格式错误：path 必须是数组")
+            paths.extend(chunk_paths)
+        return paths
 
     async def list_all_files(self) -> list[str]:
         files: list[str] = []
