@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections.abc import Callable
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -121,7 +122,16 @@ class CanonCamera:
         return {k: v for k, v in resp.json().items() if v}
 
     async def list_dir(self, href: str) -> list[str]:
-        resp = await self._get(href)
+        # CCAPI 的普通 contents 列表每页最多只返回 100 条。kind=chunked
+        # 让相机返回完整目录，避免存储卡中较早的文件永远不会进入同步队列。
+        parts = urlsplit(href)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query.setdefault("kind", "chunked")
+        query.setdefault("order", "desc")
+        chunked_href = urlunsplit((
+            parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment,
+        ))
+        resp = await self._get(chunked_href)
         return resp.json().get("path", [])
 
     async def list_all_files(self) -> list[str]:

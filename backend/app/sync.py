@@ -199,34 +199,45 @@ class SyncEngine:
                 log.info("开始同步：待备份 %d 个文件", len(pending))
             deleted = 0
             delete_failed = 0
+            failed: list[tuple[str, str]] = []
             for cam_path in pending:
                 if self._stop_requested:
                     log.info("同步已手动停止（已完成 %d/%d）", self.progress["done"], len(pending))
                     return {"stopped": True}
-                dest = self.dest_for(cam_path)
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                self.progress["current"] = cam_path
-                size = await cam.download(
-                    cam_path, dest,
-                    should_stop=lambda: self._stop_requested,
-                    on_slow=self._warn_slow_transfer,
-                )
-                self.state.mark_synced(cam_path, size, str(dest))
-                log.info("已备份 %s → %s（%.1f MB）", cam_path, dest, size / 1024 / 1024)
-                if self.pending_count > 0:
-                    self.pending_count -= 1
-                self.progress["done"] += 1
-                if self.config.delete_after_sync:
-                    try:
-                        await cam.delete(cam_path)
-                        deleted += 1
-                    except Exception as e:
-                        delete_failed += 1
-                        log.warning("已备份但删除卡上文件失败：%s（%s）", cam_path, e)
-                        self.camera_warning = f"已备份但删除卡上文件失败：{cam_path}（{e}）"
+                try:
+                    dest = self.dest_for(cam_path)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    self.progress["current"] = cam_path
+                    size = await cam.download(
+                        cam_path, dest,
+                        should_stop=lambda: self._stop_requested,
+                        on_slow=self._warn_slow_transfer,
+                    )
+                    self.state.mark_synced(cam_path, size, str(dest))
+                    log.info("已备份 %s → %s（%.1f MB）", cam_path, dest, size / 1024 / 1024)
+                    if self.pending_count > 0:
+                        self.pending_count -= 1
+                    self.progress["done"] += 1
+                    if self.config.delete_after_sync:
+                        try:
+                            await cam.delete(cam_path)
+                            deleted += 1
+                        except Exception as e:
+                            delete_failed += 1
+                            log.warning("已备份但删除卡上文件失败：%s（%s）", cam_path, e)
+                            self.camera_warning = f"已备份但删除卡上文件失败：{cam_path}（{e}）"
+                except SyncStopped:
+                    raise
+                except (CameraUnreachable, httpx.HTTPError, OSError) as e:
+                    # 一张文件失败不应阻塞整批；未标记为 synced，下一轮会继续重试。
+                    failed.append((cam_path, str(e)))
+                    log.warning("备份失败，跳过后继续：%s（%s）", cam_path, e)
             self.state.set_last_sync()
-            self.state.set_error(None)
-            result = {"downloaded": len(pending), "deleted": deleted}
+            if failed:
+                self.state.set_error(f"{len(failed)} 个文件备份失败，将在下次同步时重试：{failed[0][0]}")
+            else:
+                self.state.set_error(None)
+            result = {"downloaded": self.progress["done"], "failed": len(failed), "deleted": deleted}
             if delete_failed:
                 result["delete_failed"] = delete_failed
             if pending:
