@@ -11,6 +11,12 @@
 - **备份管理**：可手动删除备份（相机原文件进入忽略名单，不再自动传回），可随时恢复；可选"同步后删除卡上文件"
 
 ![界面预览](docs/images/image.png)
+
+## 文档
+
+- [版本变更与 Bug 修复记录](CHANGELOG.md)
+- [GitHub Releases](https://github.com/xiaokaiwangcc/canon-autosync/releases)：下载各平台安装包与发布资产
+
 ## 原理
 
 相机开启 WiFi + CCAPI 后，后端主循环：
