@@ -18,7 +18,9 @@
 
 ### Unreleased
 
-- 暂无未发布变更。
+- 增加 CCAPI 能力发现，按相机公布的资源地址选择 contents、event 和设备状态接口。
+- contents 支持在 `ver100`–`ver140` 候选间降级；旧接口不支持 `kind/order` 时自动回退普通目录列表。
+- `/api/status` 增加 CCAPI 版本、已确认 endpoint 和目录响应模式，便于积累实机兼容数据。
 
 ### 2026-09-06（v1.0.12 – v1.1.1）
 

@@ -37,9 +37,15 @@ class SyncEngine:
         self._info_refreshed_at = 0.0
         self._device_fetched = False
         self._stop_requested = False
+        self._camera_client: CanonCamera | None = None
+        self._camera_address: tuple[str, int] | None = None
 
     def camera(self) -> CanonCamera:
-        return CanonCamera(self.config.camera_ip, self.config.camera_port)
+        address = (self.config.camera_ip, self.config.camera_port)
+        if self._camera_client is None or self._camera_address != address:
+            self._camera_client = CanonCamera(*address)
+            self._camera_address = address
+        return self._camera_client
 
     def dest_for(self, cam_path: str) -> Path:
         rel = cam_path.split("/contents/", 1)[-1]
@@ -351,6 +357,7 @@ class SyncEngine:
             "camera_online": self.camera_online,
             "camera_ip": self.config.camera_ip,
             "camera_port": self.config.camera_port,
+            "ccapi": self.camera().capabilities(),
             "camera": self.camera_info,
             "camera_warning": self.camera_warning,
             "sync_mode": self.sync_mode,

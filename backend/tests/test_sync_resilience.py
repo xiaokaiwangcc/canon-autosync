@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.ccapi import CameraUnreachable, CanonCamera
+import httpx
+
+from app.ccapi import CapabilityUnsupported, CameraUnreachable, CanonCamera
 from app.config import Config
 from app.sync import SyncEngine
 
@@ -26,6 +28,24 @@ class _RecordingCamera(CanonCamera):
     async def _get(self, path, **kwargs):
         self.paths.append(path)
         return self.response
+
+
+class _RoutingCamera(CanonCamera):
+    def __init__(self, routes):
+        super().__init__("192.0.2.1")
+        self.routes = routes
+        self.paths = []
+
+    async def _get(self, path, **kwargs):
+        self.paths.append(path)
+        result = self.routes.get(path, 404)
+        if isinstance(result, int):
+            request = httpx.Request("GET", f"http://192.0.2.1:8080{path}")
+            response = httpx.Response(result, request=request)
+            raise httpx.HTTPStatusError(
+                f"HTTP {result}", request=request, response=response,
+            )
+        return result
 
 
 class _State:
@@ -97,6 +117,97 @@ class CCAPIContentsTests(unittest.IsolatedAsyncioTestCase):
             "/contents/IMG_0001.JPG",
         ])
 
+    async def test_uses_contents_endpoint_advertised_by_camera(self):
+        camera = _RoutingCamera({
+            "/ccapi/": _Response({
+                "url": [
+                    "http://192.0.2.1:8080/ccapi/ver100/",
+                    "http://192.0.2.1:8080/ccapi/ver110/",
+                ],
+            }),
+            "/ccapi/ver110": _Response({
+                "url": ["http://192.0.2.1:8080/ccapi/ver110/contents"],
+            }),
+            "/ccapi/ver100": _Response({"url": []}),
+            "/ccapi/ver110/contents?kind=chunked&order=desc": _Response({
+                "path": ["/ccapi/ver110/contents/sd/IMG_0001.JPG"],
+            }),
+        })
+
+        files = await camera.list_all_files()
+
+        self.assertEqual(files, ["/ccapi/ver110/contents/sd/IMG_0001.JPG"])
+        self.assertNotIn(
+            "/ccapi/ver130/contents?kind=chunked&order=desc", camera.paths,
+        )
+        self.assertEqual(camera.capabilities()["endpoints"]["contents"],
+                         "/ccapi/ver110/contents")
+
+    async def test_falls_back_across_contents_versions(self):
+        camera = _RoutingCamera({
+            "/ccapi/": _Response({"message": "Welcome to CCAPI"}),
+            "/ccapi/ver110/contents?kind=chunked&order=desc": _Response({
+                "path": ["/ccapi/ver110/contents/sd/IMG_0002.JPG"],
+            }),
+        })
+
+        files = await camera.list_all_files()
+
+        self.assertEqual(files, ["/ccapi/ver110/contents/sd/IMG_0002.JPG"])
+        self.assertEqual(camera.capabilities()["endpoints"]["contents"],
+                         "/ccapi/ver110/contents")
+
+    async def test_plain_listing_fallback_when_chunked_is_unsupported(self):
+        href = "/ccapi/ver100/contents/sd"
+        camera = _RoutingCamera({
+            f"{href}?kind=chunked&order=desc": 400,
+            href: _Response({"path": [f"{href}/IMG_0003.JPG"]}),
+        })
+
+        paths = await camera.list_dir(href)
+        paths_again = await camera.list_dir(href)
+
+        self.assertEqual(paths, [f"{href}/IMG_0003.JPG"])
+        self.assertEqual(paths_again, paths)
+        self.assertEqual(camera.paths.count(
+            f"{href}?kind=chunked&order=desc",
+        ), 1)
+        self.assertEqual(camera.capabilities()["contents_list_mode"], "plain")
+
+    async def test_event_endpoint_can_be_discovered_in_another_version(self):
+        camera = _RoutingCamera({
+            "/ccapi/": _Response({
+                "url": ["http://192.0.2.1:8080/ccapi/ver120/"],
+            }),
+            "/ccapi/ver120": _Response({
+                "url": ["http://192.0.2.1:8080/ccapi/ver120/event/polling"],
+            }),
+            "/ccapi/ver120/event/polling": _Response({
+                "addedcontents": ["/contents/IMG_0004.JPG"],
+            }),
+        })
+
+        events = await camera.event_poll()
+
+        self.assertEqual(events, {
+            "addedcontents": ["/contents/IMG_0004.JPG"],
+        })
+        self.assertEqual(camera.capabilities()["versions"], ["120"])
+
+    async def test_unsupported_optional_capability_is_not_reprobed(self):
+        camera = _RoutingCamera({
+            "/ccapi/": _Response({"message": "Welcome to CCAPI"}),
+        })
+
+        with self.assertRaises(CapabilityUnsupported):
+            await camera.temperature()
+        request_count = len(camera.paths)
+        with self.assertRaises(CapabilityUnsupported):
+            await camera.temperature()
+
+        self.assertEqual(len(camera.paths), request_count)
+        self.assertEqual(camera.capabilities()["unsupported"], ["temperature"])
+
 
 class SyncResilienceTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_file_does_not_stop_later_files(self):
@@ -118,3 +229,16 @@ class SyncResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(set(state.synced), {paths[0], paths[2]})
         self.assertIn("1 个文件备份失败", state.last_error)
+
+
+class SyncEngineCameraTests(unittest.TestCase):
+    def test_camera_client_is_reused_until_address_changes(self):
+        engine = SyncEngine(Config(), _State())
+
+        first = engine.camera()
+        self.assertIs(first, engine.camera())
+
+        engine.config.camera_ip = "192.0.2.2"
+        second = engine.camera()
+        self.assertIsNot(first, second)
+        self.assertEqual(second.ip, "192.0.2.2")
