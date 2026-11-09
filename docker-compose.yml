@@ -21,6 +21,7 @@ services:
       CANON_IP: ${CANON_IP:-192.168.5.53}
       # 备份目录（容器内路径，须与下方卷挂载的宿主目录一致）
       NAS_PATH: ${BACKUP_DIR:-/vol1/photos/canon-backup}
+      CANON_API_PASSWORD: ${CANON_API_PASSWORD:-}
       TZ: Asia/Shanghai
     volumes:
       # 配置与同步记录（config.json / state.json），升级不丢失

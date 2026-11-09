@@ -71,6 +71,8 @@ export const messages = {
   project: ["项目地址", "Project website"],
   restoreDefaults: ["恢复默认", "Restore defaults"],
   saveSettings: ["保存设置", "Save settings"],
+  settingsSyncInProgress: ["请等待本次同步结束，再保存设置。", "Wait for the current sync to finish before saving settings."],
+  settingsSaveFailed: ["保存设置失败，请检查输入后重试。", "Could not save settings. Check your input and try again."],
   saved: ["已保存", "Saved"],
   missingFile: ["文件已从备份目录删除", "File removed from the backup folder"],
   fileUnavailable: ["文件不存在或已删除", "File is missing or has been deleted"],

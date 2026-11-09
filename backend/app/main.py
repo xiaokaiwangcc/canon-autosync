@@ -12,10 +12,11 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from .access import api_password, protect_requests
+from .backup import BackupTarget, media_path, run_io
 from .ccapi import CanonCamera, CameraUnreachable
 from .config import Config, DATA_DIR, load_config, save_config
 from .log import attach_uvicorn_to_file, setup_logging
@@ -25,8 +26,8 @@ from .sync import SyncEngine
 setup_logging()
 log = logging.getLogger("api")
 
-state = State()
 config = load_config()
+state = State(config)
 engine = SyncEngine(config, state)
 
 
@@ -38,20 +39,34 @@ async def lifespan(app: FastAPI):
         config.camera_ip, config.camera_port, config.nas_path,
     )
     engine.start()
-    yield
-    engine.stop()
-    # 关停前强制落盘：正常退出（docker stop 等）不丢失最近未写入的同步记录/错误状态
-    await state.flush(force=True)
-    log.info("服务已停止")
+    try:
+        yield
+    finally:
+        await engine.stop()
+        await state.flush(force=True)
+        log.info("服务已停止")
 
 
 app = FastAPI(title="canon-nas", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.state.api_password = api_password()
+app.middleware("http")(protect_requests)
+
+
+async def save_state() -> None:
+    try:
+        await state.flush(force=True)
+    except OSError as error:
+        log.exception("无法保存同步记录")
+        raise HTTPException(503, "Could not save backup state") from error
+
+
+def requested_id(path: str, target: BackupTarget) -> str:
+    if path.startswith("/"):
+        try:
+            return target.file_id(path)
+        except ValueError as error:
+            raise HTTPException(400, "Invalid camera file path") from error
+    return path
 
 
 @app.get("/api/status")
@@ -67,18 +82,12 @@ def get_config():
 @app.post("/api/config")
 async def update_config(cfg: Config):
     global config
-    old_nas = config.nas_path
+    if engine.syncing:
+        raise HTTPException(409, "Wait for the current sync to finish before changing settings")
     save_config(cfg)
     config = cfg
-    engine.config = cfg
-    if Path(cfg.nas_path) != Path(old_nas):
-        # 更换备份目录：清空已备份记录，相机上的文件下一轮同步会重新下载到新目录
-        cleared = state.clear_synced()
-        await state.flush(force=True)  # 路由线程外无事件循环调度，立即落盘
-        engine.recount_pending()
-        log.info("备份目录已更换：%s → %s，已清空 %d 条已备份记录，将重新同步", old_nas, cfg.nas_path, cleared)
-    else:
-        log.info("配置已更新：%s", cfg.model_dump_json())
+    engine.apply_config(cfg)
+    log.info("配置已更新：%s", cfg.model_dump_json())
     return cfg.model_dump()
 
 
@@ -100,10 +109,11 @@ async def reconnect_camera():
 
 
 @app.get("/api/files")
-def list_synced(offset: int = 0, limit: int = 100):
+def list_synced(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200)):
     # 快照在锁内复制：同步主循环会并发写 state.synced，直接遍历可能抛
     # RuntimeError（dictionary changed size during iteration）导致接口 500
-    items = state.snapshot_synced()
+    target = BackupTarget.from_config(config)
+    items = state.snapshot_synced(target.root)
     items.sort(key=lambda kv: kv[1]["synced_at"], reverse=True)
     total = len(items)
     page = items[offset : offset + limit]
@@ -111,44 +121,63 @@ def list_synced(offset: int = 0, limit: int = 100):
     # 前端据此标记「已删除」而非误报缩略图加载失败（每页最多 200 条 stat，开销可忽略）
     # NAS 掉线/未挂载时 is_file 全为 False，会把正常记录误标「已删除」；
     # 根目录不可达时跳过存在性校验（exists=None，前端按未知处理不误标）
-    nas_ok = Path(config.nas_path).is_dir()
+    nas_ok = target.root.is_dir()
     result = []
-    for path, meta in page:
+    for file_id, meta in page:
         dest = meta.get("dest")
         result.append({
-            "path": path,
-            **meta,
+            "id": file_id,
+            "path": meta["href"],
+            "dest": dest,
+            "size": meta["size"],
+            "synced_at": meta["synced_at"],
             "exists": (bool(dest) and Path(dest).is_file()) if nas_ok else None,
         })
     return {"total": total, "items": result}
 
 
 @app.delete("/api/files")
-def delete_synced(path: str = Query(...)):
+async def delete_synced(path: str = Query(...)):
     """删除一条已备份记录及其 NAS 上的文件。仅允许删除 nas_path 内的文件，防目录穿越。"""
-    meta = state.remove_synced(path)
+    if engine.syncing:
+        raise HTTPException(409, "Wait for the current sync to finish before deleting backups")
+    target = BackupTarget.from_config(config)
+    file_id = requested_id(path, target)
+    meta = state.get_synced(file_id, target.root)
     if meta is None:
         raise HTTPException(404, "记录不存在")
-    state.ignore(path)  # 相机上的原文件不再被自动同步传回
-    engine.recount_pending()
     dest = meta.get("dest")
     deleted_file = False
     if dest:
-        root = Path(config.nas_path).resolve()
-        target = Path(dest).resolve()
-        if root == target or root in target.parents:
-            try:
-                target.unlink(missing_ok=True)
-                deleted_file = True
-            except OSError as e:
-                log.warning("删除备份文件失败 %s: %s", dest, e)
+        def _delete_file():
+            if not target.root.is_dir():
+                raise HTTPException(503, "备份目录不可访问，请检查 NAS 挂载状态")
+            target.checked_path(Path(dest))
+            # Remove the directory entry itself even if it is a symlink.
+            if not state.destination_claimed(dest, file_id):
+                Path(dest).unlink(missing_ok=True)
+                return True
+            return False
+
+        try:
+            deleted_file = await run_io(_delete_file)
+        except (OSError, ValueError) as error:
+            raise HTTPException(409, "Could not delete the backup file") from error
+    state.ignore(file_id, target.root)  # 相机上的原文件不再被自动同步传回
+    state.remove_synced(file_id)
+    await save_state()
+    engine.recount_pending()
     return {"ok": True, "deleted_file": deleted_file}
 
 
 @app.post("/api/files/restore")
-def restore_ignored(path: str = Query(...)):
+async def restore_ignored(path: str = Query(...)):
     """把文件移出忽略名单：待备份列表和自动同步会重新包含它。"""
-    restored = state.unignore(path)
+    target = BackupTarget.from_config(config)
+    file_id = requested_id(path, target)
+    restored = file_id in state.snapshot_ignored(target.root) and state.unignore(file_id)
+    if restored:
+        await save_state()
     engine.recount_pending()
     return {"ok": restored}
 
@@ -158,24 +187,33 @@ async def cleanup_missing():
     """批量清理已从备份目录删除的同步记录：仅移除 dest 已不存在的记录，
     存在的文件不受影响；与单个删除一致，相机上的原文件加入忽略名单不再自动传回。
     """
+    if engine.syncing:
+        raise HTTPException(409, "Wait for the current sync to finish before cleaning up backups")
     # NAS 掉线/未挂载时 is_file 全为 False，会误清全部记录并加入忽略名单，先检查根目录可达
-    if not Path(config.nas_path).is_dir():
-        raise HTTPException(503, "备份目录不可访问，请检查 NAS 挂载状态")
+    target = BackupTarget.from_config(config)
 
-    def _scan_and_remove() -> int:
-        removed = 0
-        for path, meta in state.snapshot_synced():
+    def _scan_missing() -> list:
+        if not target.root.is_dir():
+            raise HTTPException(503, "备份目录不可访问，请检查 NAS 挂载状态")
+        missing = []
+        for file_id, meta in state.snapshot_synced(target.root):
             dest = meta.get("dest")
             if dest and not Path(dest).is_file():
-                state.remove_synced(path)
-                state.ignore(path)
-                removed += 1
-        return removed
+                missing.append((file_id, meta))
+        return missing
 
     # 网络挂载盘上逐条 stat 是同步网络 IO，放线程池执行避免阻塞事件循环
-    removed = await asyncio.to_thread(_scan_and_remove)
+    removed = 0
+    missing = await run_io(_scan_missing)
+    if engine.syncing:
+        raise HTTPException(409, "Wait for the current sync to finish before cleaning up backups")
+    for file_id, meta in missing:
+        if state.get_synced(file_id, target.root) is meta:
+            state.ignore(file_id, target.root)
+            state.remove_synced(file_id)
+            removed += 1
     if removed:
-        await state.flush(force=True)  # 路由线程外无事件循环调度，立即落盘
+        await save_state()
         engine.recount_pending()
         log.info("已批量清理 %d 条已删除的备份记录", removed)
     return {"removed": removed}
@@ -187,11 +225,11 @@ async def clear_ignored():
     相机上仍存在的原文件会重新进入待备份列表并自动同步。
     """
     cleared = 0
-    for path in state.snapshot_ignored():
+    for path in state.snapshot_ignored(BackupTarget.from_config(config).root):
         if state.unignore(path):
             cleared += 1
     if cleared:
-        await state.flush(force=True)
+        await save_state()
         engine.recount_pending()
         log.info("已批量清除 %d 条忽略记录", cleared)
     return {"cleared": cleared}
@@ -200,8 +238,8 @@ async def clear_ignored():
 @app.get("/api/pending")
 def list_pending():
     items = [
-        {"path": p, "ignored": state.is_ignored(p)}
-        for p in engine.camera_files if not state.is_synced(p)
+        {"path": href, "ignored": ignored}
+        for href, _, ignored in engine.pending_files(BackupTarget.from_config(config), include_ignored=True)
     ]
     # 被忽略（手动删除备份）的排在最后，不打扰正常待备份浏览
     items.sort(key=lambda x: x["ignored"])
@@ -212,20 +250,30 @@ def list_pending():
 # 保护：信号量限制小并发窗口 + 请求失败重试 + 内存缓存（轮询刷新不再重复打相机）
 # 再加浏览器缓存头：切页/刷新后命中本地缓存，不再请求后端
 _thumb_sem = asyncio.Semaphore(2)
-_thumb_cache: dict[str, tuple[bytes, str]] = {}
-_CACHE_HEADERS = {"Cache-Control": "public, max-age=600"}
+_thumb_cache: dict[tuple[str, int, str], tuple[bytes, str]] = {}
+_CACHE_HEADERS = {
+    "Cache-Control": "private, max-age=600",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "X-Content-Type-Options": "nosniff",
+}
+_CAMERA_THUMB_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 @app.get("/api/thumb")
 async def thumbnail(path: str = Query(...)):
+    try:
+        media_path(path)
+    except ValueError as error:
+        raise HTTPException(400, "Invalid camera file path") from error
     cam: CanonCamera = engine.camera()
-    cached = _thumb_cache.get(path)
+    key = (cam.ip, cam.port, path)
+    cached = _thumb_cache.get(key)
     if cached:
         return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
     try:
         async with httpx.AsyncClient(timeout=10) as client:  # 重试复用同一连接
             for attempt in range(2):
                 async with _thumb_sem:
-                    cached = _thumb_cache.get(path)
+                    cached = _thumb_cache.get(key)
                     if cached:
                         return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
                     resp = await client.get(cam.thumb_url(path))
@@ -234,12 +282,17 @@ async def thumbnail(path: str = Query(...)):
                     await asyncio.sleep(1)
                     continue
                 resp.raise_for_status()
+                media_type = resp.headers.get("content-type", "image/jpeg").partition(";")[0].lower()
+                if media_type == "application/octet-stream" and resp.content.startswith(b"\xff\xd8"):
+                    media_type = "image/jpeg"
+                if media_type not in _CAMERA_THUMB_TYPES:
+                    raise HTTPException(502, "Unexpected camera thumbnail type")
                 if len(_thumb_cache) > 200:
                     # 只清最旧的一半，保留近期热图
-                    for key in list(_thumb_cache)[: len(_thumb_cache) // 2]:
-                        del _thumb_cache[key]
-                _thumb_cache[path] = (resp.content, resp.headers.get("content-type", "image/jpeg"))
-                return StreamingResponse(iter([resp.content]), media_type=_thumb_cache[path][1], headers=_CACHE_HEADERS)
+                    for old in list(_thumb_cache)[: len(_thumb_cache) // 2]:
+                        del _thumb_cache[old]
+                _thumb_cache[key] = (resp.content, media_type)
+                return StreamingResponse(iter([resp.content]), media_type=media_type, headers=_CACHE_HEADERS)
     except (CameraUnreachable, httpx.HTTPError) as e:
         raise HTTPException(502, f"获取缩略图失败：相机连接异常（{e}）")
 
@@ -341,15 +394,22 @@ def _video_thumb(target: Path, size: int) -> bytes:
 
 
 @app.get("/api/preview")
-def preview(path: str = Query(...), size: int | None = None):
+def preview(path: str | None = None, size: int | None = None, id: str | None = None):
     """预览已备份到 NAS 的文件：仅允许 nas_path 目录内的文件，防目录穿越。
     带 size 时生成缩略图（图片用 Pillow，视频用 ffmpeg 提取首帧，RAW 提取内嵌 JPEG 预览；
     结果磁盘缓存，避免每次请求都解码原文件），否则返回原文件（RAW 返回内嵌 JPEG）。
     """
-    root = Path(config.nas_path).resolve()
-    target = Path(path).resolve()
-    if root != target and root not in target.parents:
-        raise HTTPException(400, "文件不在备份目录内")
+    backup = BackupTarget.from_config(config)
+    if id is not None:
+        meta = state.get_synced(id, backup.root)
+    else:
+        meta = next((meta for _, meta in state.snapshot_synced(backup.root) if meta["dest"] == path), None)
+    if not meta:
+        raise HTTPException(404, "备份记录不存在")
+    try:
+        target = backup.checked_path(Path(meta["dest"]))
+    except ValueError as error:
+        raise HTTPException(400, "文件不在备份目录内") from error
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
     if not size:
@@ -359,7 +419,7 @@ def preview(path: str = Query(...), size: int | None = None):
             if raw_jpeg:
                 return Response(raw_jpeg, media_type="image/jpeg", headers=_CACHE_HEADERS)
         return FileResponse(target, headers=_CACHE_HEADERS)
-    cache_file = _thumb_cache_file(path, size, int(target.stat().st_mtime))
+    cache_file = _thumb_cache_file(str(target), size, target.stat().st_mtime_ns)
     if cache_file.is_file():
         return FileResponse(cache_file, headers=_CACHE_HEADERS)
     try:

@@ -29,6 +29,7 @@ case "${1:-}" in
       exit 0
     fi
     export CANON_NAS_DATA="$TRIM_PKGVAR"
+    export CANON_REQUIRE_AUTH=1
     cd "$APP_DIR" || exit 1
     nohup "$VENV/bin/python" -m uvicorn app.main:app \
       --host 0.0.0.0 --port "$TRIM_SERVICE_PORT" >>"$LOGFILE" 2>&1 &

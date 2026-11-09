@@ -8,12 +8,20 @@
 
 - **中英文界面**：在「设置 → 关于 → 界面语言」切换，网页会记住当前浏览器中的选择
 - **秒级同步**：事件驱动监听相机，拍照/录视频后立即自动备份；事件驱动不可用时自动降级为定时扫描兜底（默认 60s，可配置）
+- **多版本 CCAPI**：自动发现相机公布的接口，按能力选择 endpoint；目录接口兼容 `ver100`–`ver140` 候选和普通/chunked 响应
 - **传输保护**：同步前健康检查（相机过热/低电量自动暂停）、传输速率监控（Wi-Fi 弱时提示）、缩略图请求并发限制 + 失败重试 + 多级缓存（内存/磁盘/浏览器），避免相机 CCAPI 被并发打挂（503）
 - **相机状态面板**：电量、机身温度、存储卡容量、序列号/MAC、同步进度实时显示
 - **文件浏览**：已备份 / 待备份双标签（每 5s 自动刷新），列表/图标两种视图，支持文件名搜索、缩略图封面（RAW 提取内嵌 JPEG 预览、MP4/MOV 提取视频首帧，其余不可预览格式显示类型占位图标）、大图预览（键盘 ← → 切换、Esc 关闭）、视频可在线播放
 - **备份管理**：可手动删除备份（相机原文件进入忽略名单，不再自动传回），可随时恢复；可选"同步后删除卡上文件"
 
 ![界面预览](docs/images/image.png)
+
+## 文档
+
+- [版本变更与 Bug 修复记录](CHANGELOG.md)
+- [CCAPI 兼容性与实机验证](docs/ccapi-compatibility.md)
+- [GitHub Releases](https://github.com/xiaokaiwangcc/canon-autosync/releases)：下载各平台安装包与发布资产
+
 ## 原理
 
 相机开启 WiFi + CCAPI 后，后端主循环：
@@ -93,18 +101,20 @@ macOS 首次打开提示"无法验证开发者"（应用未签名公证），任
 docker compose up -d --build   # 默认相机 IP 192.168.5.53、备份目录 /vol1/photos/canon-backup
 ```
 
-打开 `http://<NAS IP>:8315`。可用 `.env` 覆盖默认配置：
+打开 `http://<NAS IP>:8315`，使用用户名 `canon` 登录。首次启动会把随机密码保存到 `DATA_DIR/api-password`（默认 `./data/api-password`），可在宿主机读取。可用 `.env` 覆盖默认配置：
 
 ```bash
 CANON_IP=192.168.1.50                # 相机 IP
 BACKUP_DIR=/vol1/photos/canon-backup # 照片备份目录（宿主路径）
 DATA_DIR=./data                      # 配置与同步记录存储位置
+# CANON_API_PASSWORD=...            # 可选，自定义登录密码
 ```
 
 部署要点：
 
 - **host 网络模式**：相机经 Wi-Fi 接入宿主机网络（如 NAS 发射的 AP 热点），容器需共享宿主机网络栈才能直连相机 IP，故 `docker-compose.yml` 使用 `network_mode: host`，端口固定 8315
 - **数据持久化**：配置/同步记录存于 `DATA_DIR` 卷、照片存于 `BACKUP_DIR` 卷，升级不丢失
+- **访问控制**：NAS 版使用 HTTP Basic 登录。跨不可信网络访问时，通过 HTTPS 反向代理提供服务。
 - 多阶段构建：Node构建前端 → Python 3.12 单容器托管（单端口 8315）
 
 ## 打包飞牛 fnOS 应用（.fpk）
@@ -121,6 +131,7 @@ DATA_DIR=./data                      # 配置与同步记录存储位置
 - 依赖飞牛官方 Python 运行时（`install_dep_apps=python312`），首次启动自动创建 venv 并 pip install（需 NAS 能访问 PyPI）
 - 安装向导询问相机 IP 和备份目录；使用自定义目录需在 应用设置 → 授权目录中授权
 - 配置和同步记录存于应用数据目录（`TRIM_PKGVAR`），升级不丢失；日志在 `app.log`
+- 首次启动会在应用数据目录生成 `api-password`。使用用户名 `canon` 和该文件中的密码登录；如果应用窗口未弹出登录框，直接在浏览器打开 `http://<NAS IP>:8315`。
 
 ## API
 
@@ -136,4 +147,4 @@ DATA_DIR=./data                      # 配置与同步记录存储位置
 | POST | /api/files/restore?path= | 移出忽略名单，恢复自动备份 |
 | GET | /api/pending | 相机上待备份文件 |
 | GET | /api/thumb?path= | 相机文件缩略图（并发限制 + 缓存） |
-| GET | /api/preview?path=&size= | 已备份文件预览/缩略图（仅限备份目录内，防目录穿越） |
+| GET | /api/preview?id=&size= | 预览已登记的备份，使用 `/api/files` 返回的 `id` |

@@ -1,13 +1,25 @@
 import asyncio
 import json
+import os
+import re
 import time
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-CONTENTS_ROOT = "/ccapi/ver130/contents"
-EVENT_POLL_URL = "/ccapi/ver100/event/polling"
+from .backup import run_io
+
+CCAPI_ROOT = "/ccapi/"
+VERSION_ROOT_RE = re.compile(r"^/ccapi/ver(\d+)/?$")
+FALLBACK_VERSIONS = {
+    "contents": ("130", "140", "120", "110", "100"),
+    "event": ("100", "110", "120", "130", "140"),
+    "device": ("100", "110", "120", "130", "140"),
+    "battery": ("100", "110", "120", "130", "140"),
+    "temperature": ("100", "110", "120", "130", "140"),
+    "storage": ("110", "100", "120", "130", "140"),
+}
 # 相机无事件时保持连接约 60s 后才返回，read 超时必须大于该时长
 EVENT_POLL_READ_TIMEOUT = 65.0
 # 下载停滞判定：窗口内累计传输低于下限即视为相机已断线/卡死，避免界面无限停在“同步中”
@@ -33,10 +45,22 @@ class EventPollUnsupported(Exception):
     pass
 
 
+class CapabilityUnsupported(Exception):
+    """相机未公布且候选版本均不支持某项可选能力。"""
+    pass
+
+
 class CanonCamera:
     def __init__(self, ip: str, port: int = 8080, timeout: float = 10.0):
+        self.ip = ip
+        self.port = port
         self.base = f"http://{ip}:{port}"
         self.timeout = timeout
+        self._catalog_loaded = False
+        self._advertised_paths: set[str] = set()
+        self._endpoint_cache: dict[str, str] = {}
+        self._unsupported_capabilities: set[str] = set()
+        self._contents_list_mode: str | None = None
 
     async def _get(self, path: str, retries: int = 0, timeout=None, client: httpx.AsyncClient | None = None, **kwargs) -> httpx.Response:
         last_err: Exception | None = None
@@ -65,11 +89,134 @@ class CanonCamera:
         raise last_err
 
     async def ping(self) -> dict:
-        resp = await self._get("/ccapi/", retries=2)
-        return resp.json()
+        resp = await self._get(CCAPI_ROOT, retries=2)
+        payload = resp.json()
+        self._advertised_paths.update(self._extract_ccapi_paths(payload))
+        return payload
+
+    @staticmethod
+    def _extract_ccapi_paths(payload) -> set[str]:
+        """从不同版本的入口 JSON 中递归提取 CCAPI URL/路径。"""
+        paths: set[str] = set()
+
+        def visit(value) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    visit(key)
+                    visit(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(item)
+            elif isinstance(value, str):
+                candidate = value.strip()
+                if re.fullmatch(r"ver\d+", candidate):
+                    paths.add(f"/ccapi/{candidate}")
+                    return
+                if candidate.startswith(("http://", "https://")):
+                    candidate = urlsplit(candidate).path
+                elif "/ccapi/" in candidate and not candidate.startswith("/ccapi/"):
+                    candidate = candidate[candidate.index("/ccapi/"):]
+                if candidate.startswith("/ccapi/"):
+                    normalized = candidate.rstrip("/")
+                    paths.add(CCAPI_ROOT if normalized == "/ccapi" else normalized)
+
+        visit(payload)
+        return paths
+
+    async def _ensure_catalog(self) -> None:
+        if self._catalog_loaded:
+            return
+        if not self._advertised_paths:
+            await self.ping()
+
+        # /ccapi/ 通常先公布版本入口，再由版本入口公布具体资源。
+        version_roots = sorted(
+            (path for path in self._advertised_paths if VERSION_ROOT_RE.match(path)),
+            key=lambda path: int(VERSION_ROOT_RE.match(path).group(1)),
+            reverse=True,
+        )
+        for root in version_roots:
+            try:
+                resp = await self._get(root)
+                self._advertised_paths.update(self._extract_ccapi_paths(resp.json()))
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (404, 405):
+                    raise
+        self._catalog_loaded = True
+
+    @staticmethod
+    def _path_version(path: str) -> int:
+        match = re.search(r"/ver(\d+)(?:/|$)", path)
+        return int(match.group(1)) if match else 0
+
+    async def _candidate_endpoints(
+        self,
+        capability: str,
+        suffix: str,
+    ) -> list[str]:
+        await self._ensure_catalog()
+        normalized_suffix = "/" + suffix.strip("/")
+        advertised = sorted(
+            (
+                path for path in self._advertised_paths
+                if path.rstrip("/").endswith(normalized_suffix)
+            ),
+            key=self._path_version,
+            reverse=True,
+        )
+        fallbacks = [
+            f"/ccapi/ver{version}{normalized_suffix}"
+            for version in FALLBACK_VERSIONS[capability]
+        ]
+        return list(dict.fromkeys([*advertised, *fallbacks]))
+
+    async def _get_capability(
+        self,
+        capability: str,
+        suffix: str,
+        *,
+        client: httpx.AsyncClient | None = None,
+        timeout=None,
+    ) -> httpx.Response:
+        if capability in self._unsupported_capabilities:
+            raise CapabilityUnsupported(f"相机不支持 {capability} 接口")
+        cached = self._endpoint_cache.get(capability)
+        candidates = [cached] if cached else []
+        candidates.extend(await self._candidate_endpoints(capability, suffix))
+        last_missing: httpx.HTTPStatusError | None = None
+        for path in dict.fromkeys(path for path in candidates if path):
+            try:
+                resp = await self._get(path, client=client, timeout=timeout)
+                self._endpoint_cache[capability] = path
+                return resp
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (404, 405):
+                    raise
+                last_missing = e
+                if cached == path:
+                    self._endpoint_cache.pop(capability, None)
+        if last_missing is not None:
+            self._unsupported_capabilities.add(capability)
+        raise CapabilityUnsupported(f"相机不支持 {capability} 接口")
+
+    def capabilities(self) -> dict:
+        versions = sorted(
+            {
+                match.group(1)
+                for path in self._advertised_paths
+                if (match := re.search(r"/ccapi/ver(\d+)(?:/|$)", path))
+            },
+            key=int,
+        )
+        return {
+            "versions": versions,
+            "endpoints": dict(self._endpoint_cache),
+            "unsupported": sorted(self._unsupported_capabilities),
+            "contents_list_mode": self._contents_list_mode,
+        }
 
     async def poll_events(self) -> list[str]:
-        resp = await self._get("/ccapi/ver100/event/polling")
+        resp = await self._get_capability("event", "event/polling")
         return resp.json().get("addedcontents") or []
 
     async def disable_autopoweroff(self) -> None:
@@ -83,19 +230,19 @@ class CanonCamera:
             raise CameraUnreachable(str(e)) from e
 
     async def device_info(self) -> dict:
-        resp = await self._get("/ccapi/ver100/deviceinformation")
+        resp = await self._get_capability("device", "deviceinformation")
         return resp.json()
 
     async def battery(self) -> dict:
-        resp = await self._get("/ccapi/ver100/devicestatus/battery")
+        resp = await self._get_capability("battery", "devicestatus/battery")
         return resp.json()
 
     async def temperature(self) -> dict:
-        resp = await self._get("/ccapi/ver100/devicestatus/temperature")
+        resp = await self._get_capability("temperature", "devicestatus/temperature")
         return resp.json()
 
     async def storage(self) -> dict:
-        resp = await self._get("/ccapi/ver110/devicestatus/storage")
+        resp = await self._get_capability("storage", "devicestatus/storage")
         return resp.json()
 
     async def event_poll(self, client: httpx.AsyncClient | None = None) -> dict:
@@ -106,8 +253,9 @@ class CanonCamera:
         只有连接复用时长轮询才会真正挂起等待事件。
         """
         try:
-            resp = await self._get(
-                EVENT_POLL_URL,
+            resp = await self._get_capability(
+                "event",
+                "event/polling",
                 client=client,
                 # httpx.Timeout 要求四个参数全给或带默认值，缺 write/pool 会抛 ValueError
                 timeout=httpx.Timeout(
@@ -115,10 +263,12 @@ class CanonCamera:
                     write=self.timeout, pool=self.timeout,
                 ),
             )
+        except CapabilityUnsupported:
+            raise EventPollUnsupported("相机不支持事件轮询")
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise EventPollUnsupported("相机不支持事件轮询")
-            raise
+            if e.response.status_code not in (404, 405):
+                raise
+            raise EventPollUnsupported("相机不支持事件轮询")
         if not resp.text.strip():
             return {}
         # 响应形如 {"addedcontents": [...], "deletedcontents": [...], "batterychanged": ...}
@@ -135,7 +285,18 @@ class CanonCamera:
         chunked_href = urlunsplit((
             parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment,
         ))
-        resp = await self._get(chunked_href)
+        if self._contents_list_mode == "plain":
+            resp = await self._get(href)
+        else:
+            try:
+                resp = await self._get(chunked_href)
+                self._contents_list_mode = "chunked"
+            except httpx.HTTPStatusError as e:
+                # 旧 CCAPI 可能不接受 kind/order；退回普通目录响应。
+                if e.response.status_code not in (400, 404, 405):
+                    raise
+                resp = await self._get(href)
+                self._contents_list_mode = "plain"
         # kind=chunked 的响应由多个 JSON 对象直接拼接而成，而非一个 JSON 数组。
         # httpx.Response.json() 只能解析单个对象，会在第二段起报 “Extra data”。
         decoder = json.JSONDecoder()
@@ -157,8 +318,28 @@ class CanonCamera:
         return paths
 
     async def list_all_files(self) -> list[str]:
+        cached = self._endpoint_cache.get("contents")
+        roots = list(dict.fromkeys([
+            *([cached] if cached else []),
+            *await self._candidate_endpoints("contents", "contents"),
+        ]))
+        last_missing: httpx.HTTPStatusError | None = None
+        for root in roots:
+            try:
+                files = await self._walk_contents(root)
+                self._endpoint_cache["contents"] = root
+                return files
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in (404, 405):
+                    raise
+                last_missing = e
+        if last_missing is not None:
+            raise last_missing
+        raise CameraUnreachable("相机未提供可用的 contents 接口")
+
+    async def _walk_contents(self, root: str) -> list[str]:
         files: list[str] = []
-        queue = [CONTENTS_ROOT]
+        queue = [root]
         while queue:
             current = queue.pop()
             for href in await self.list_dir(current):
@@ -192,7 +373,9 @@ class CanonCamera:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0)) as client:
             for attempt in range(3):
                 try:
-                    async with client.stream("GET", self.file_url(href)) as resp:
+                    async with client.stream(
+                        "GET", self.file_url(href), headers={"Accept-Encoding": "identity"},
+                    ) as resp:
                         if resp.status_code == 503:
                             if attempt < 2:
                                 await asyncio.sleep(1.5)
@@ -201,6 +384,17 @@ class CanonCamera:
                                 "相机持续忙碌（HTTP 503），可能正在处理其他操作或过热，请稍后重试"
                             )
                         resp.raise_for_status()
+                        content_type = resp.headers.get("content-type", "").partition(";")[0].lower()
+                        if (
+                            resp.status_code != 200
+                            or resp.headers.get("content-encoding", "identity").lower() != "identity"
+                            or content_type in ("application/json", "text/html")
+                            or content_type.endswith("+json")
+                        ):
+                            raise CameraUnreachable("相机返回的文件响应格式不受支持")
+                        length = resp.headers.get("content-length")
+                        if length is not None and not length.isdecimal():
+                            raise CameraUnreachable("相机返回的文件长度无效")
                         with open(dest, "wb") as f:
                             window_start = time.monotonic()
                             window_bytes = 0
@@ -222,8 +416,12 @@ class CanonCamera:
                                             on_slow(rate)
                                     window_start = now
                                     window_bytes = 0
-                                await asyncio.to_thread(f.write, chunk)
+                                await run_io(f.write, chunk)
                                 size += len(chunk)
+                            if not size or (length is not None and size != int(length)):
+                                raise CameraUnreachable("相机返回的文件为空或未完整传输")
+                            await run_io(f.flush)
+                            await run_io(os.fsync, f.fileno())
                         return size
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
                     raise CameraUnreachable(str(e)) from e
