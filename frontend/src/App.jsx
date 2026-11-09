@@ -543,6 +543,7 @@ function ConfigForm({ version }) {
   const { language, setLanguage, t } = useLanguage()
   const [cfg, setCfg] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
     api.config().then(setCfg).catch(() => {})
@@ -556,9 +557,15 @@ function ConfigForm({ version }) {
     if (cfg.delete_after_sync && !window.confirm(t('confirmDeleteAfterSync'))) {
       return
     }
-    await api.saveConfig({ ...cfg, camera_port: Number(cfg.camera_port), poll_interval: Number(cfg.poll_interval) })
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    setSaveError(null)
+    setSaved(false)
+    try {
+      await api.saveConfig({ ...cfg, camera_port: Number(cfg.camera_port), poll_interval: Number(cfg.poll_interval) })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setSaveError(err.status === 409 ? 'settingsSyncInProgress' : 'settingsSaveFailed')
+    }
   }
 
   const resetDefaults = () => {
@@ -568,6 +575,7 @@ function ConfigForm({ version }) {
 
   return (
     <form className="settings-form" onSubmit={submit}>
+      {saveError && <div className="error" role="alert">{t(saveError)}</div>}
       <div className="settings-grid">
         <div className="settings-col">
           <SectionCard icon={ICON_WIFI} title={t('cameraConnection')} subtitle={t('cameraConnectionHint')}>
@@ -791,7 +799,7 @@ function FileList() {
     const list = currentList.map((x) => {
       const src = isP
         ? `/api/thumb?path=${encodeURIComponent(x.path)}`
-        : `/api/preview?path=${encodeURIComponent(x.dest)}`
+        : `/api/preview?id=${encodeURIComponent(x.id)}`
       return {
         src,
         name: x.path.split('/').pop(),
@@ -819,17 +827,17 @@ function FileList() {
     return () => clearInterval(t)
   }, [])
 
-  const deleteFile = async (e, camPath, missing = false) => {
+  const deleteFile = async (e, file, missing = false) => {
     e.stopPropagation()
-    const name = camPath.split('/').pop()
+    const name = file.path.split('/').pop()
     // 文件已不在备份目录：仅移除记录（后端同时加入忽略名单，相机上的原文件不再自动回传）
     const confirmMsg = missing
       ? t('confirmRemoveRecord', { name })
       : t('confirmDeleteBackup', { name })
     if (!window.confirm(confirmMsg)) return
     try {
-      await api.deleteFile(camPath)
-      setFiles((fs) => fs.filter((f) => f.path !== camPath))
+      await api.deleteFile(file.id)
+      setFiles((fs) => fs.filter((f) => f.id !== file.id))
     } catch {
       setError({ key: 'deleteFailed' })
     }
@@ -966,7 +974,7 @@ function FileList() {
             return (
               <div
                 className={`photo-card${ignored ? ' ignored' : ''}${missing ? ' missing' : ''}`}
-                key={x.path}
+                key={x.id ?? x.path}
                 onClick={() => openPreview(i)}
                 title={missing ? `${x.path}\n${t('missingFile')}` : ignored ? `${x.path}\n${t('ignoredFile')}` : x.path}
               >
@@ -974,7 +982,7 @@ function FileList() {
                   <button
                     className="photo-del"
                     title={missing ? t('removeRecord') : t('deleteBackup')}
-                    onClick={(e) => deleteFile(e, x.path, missing)}
+                    onClick={(e) => deleteFile(e, x, missing)}
                   >
                     <IconTrash />
                   </button>
@@ -987,7 +995,7 @@ function FileList() {
                   <Thumb
                     src={isPending
                       ? `/api/thumb?path=${encodeURIComponent(x.path)}`
-                      : `/api/preview?path=${encodeURIComponent(x.dest)}&size=480`}
+                      : `/api/preview?id=${encodeURIComponent(x.id)}&size=480`}
                     name={name}
                   />
                 )}
@@ -1019,12 +1027,12 @@ function FileList() {
               // 已同步但文件被从备份目录删除：封面显示占位，行内标记「已删除」
               const missing = f.exists === false
               return (
-                <tr key={f.path} onClick={() => openPreview(i)} title={missing ? t('previewMissing') : t('preview')}>
+                <tr key={f.id} onClick={() => openPreview(i)} title={missing ? t('previewMissing') : t('preview')}>
                   <td>
                     {missing ? (
                       <div className="thumb thumb-empty thumb-image" title={t('missingFile')} />
                     ) : (
-                      <Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} />
+                      <Thumb src={`/api/preview?id=${encodeURIComponent(f.id)}&size=160`} name={f.path.split('/').pop()} />
                     )}
                   </td>
                   <td>
@@ -1035,7 +1043,7 @@ function FileList() {
                   <td>{f.dest}</td>
                   <td>{fmtTime(f.synced_at)}</td>
                   <td>
-                    <button className="row-del" title={missing ? t('removeRecord') : t('deleteBackup')} onClick={(e) => deleteFile(e, f.path, missing)}>
+                    <button className="row-del" title={missing ? t('removeRecord') : t('deleteBackup')} onClick={(e) => deleteFile(e, f, missing)}>
                       <IconTrash />
                     </button>
                   </td>

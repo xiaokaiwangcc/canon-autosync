@@ -1,11 +1,14 @@
 import asyncio
 import json
+import os
 import re
 import time
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
+
+from .backup import run_io
 
 CCAPI_ROOT = "/ccapi/"
 VERSION_ROOT_RE = re.compile(r"^/ccapi/ver(\d+)/?$")
@@ -370,7 +373,9 @@ class CanonCamera:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0)) as client:
             for attempt in range(3):
                 try:
-                    async with client.stream("GET", self.file_url(href)) as resp:
+                    async with client.stream(
+                        "GET", self.file_url(href), headers={"Accept-Encoding": "identity"},
+                    ) as resp:
                         if resp.status_code == 503:
                             if attempt < 2:
                                 await asyncio.sleep(1.5)
@@ -379,6 +384,17 @@ class CanonCamera:
                                 "相机持续忙碌（HTTP 503），可能正在处理其他操作或过热，请稍后重试"
                             )
                         resp.raise_for_status()
+                        content_type = resp.headers.get("content-type", "").partition(";")[0].lower()
+                        if (
+                            resp.status_code != 200
+                            or resp.headers.get("content-encoding", "identity").lower() != "identity"
+                            or content_type in ("application/json", "text/html")
+                            or content_type.endswith("+json")
+                        ):
+                            raise CameraUnreachable("相机返回的文件响应格式不受支持")
+                        length = resp.headers.get("content-length")
+                        if length is not None and not length.isdecimal():
+                            raise CameraUnreachable("相机返回的文件长度无效")
                         with open(dest, "wb") as f:
                             window_start = time.monotonic()
                             window_bytes = 0
@@ -400,8 +416,12 @@ class CanonCamera:
                                             on_slow(rate)
                                     window_start = now
                                     window_bytes = 0
-                                await asyncio.to_thread(f.write, chunk)
+                                await run_io(f.write, chunk)
                                 size += len(chunk)
+                            if not size or (length is not None and size != int(length)):
+                                raise CameraUnreachable("相机返回的文件为空或未完整传输")
+                            await run_io(f.flush)
+                            await run_io(os.fsync, f.fileno())
                         return size
                 except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
                     raise CameraUnreachable(str(e)) from e

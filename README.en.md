@@ -77,12 +77,13 @@ If macOS blocks the unsigned app when you first open it, look for **Open Anyway*
 docker compose up -d --build
 ```
 
-Open port `8315` on the NAS or server. The Compose file uses host networking so the backend can reach the camera on the local network. Set the following values in a `.env` file to customize the deployment.
+Open port `8315` on the NAS or server and sign in as `canon`. On first startup the app saves a generated password to `DATA_DIR/api-password` (by default `./data/api-password` on the host). For access across untrusted networks, serve the app through an HTTPS reverse proxy. Set the following values in a `.env` file to customize the deployment.
 
 ```dotenv
 CANON_IP=192.168.1.50
 BACKUP_DIR=/vol1/photos/canon-backup
 DATA_DIR=./data
+# CANON_API_PASSWORD=...   # Optional custom login password
 ```
 
 `BACKUP_DIR` is the host folder for backed-up media. `DATA_DIR` holds configuration and sync history. Both are mounted into the container.
@@ -94,6 +95,7 @@ Run `./fpk/build.sh` with `fnpack` available to build the frontend and package t
 - The package uses the fnOS Python 3.12 runtime and installs its Python dependencies from PyPI on first start.
 - Enter the camera IP and backup folder in the fnOS installer, which is in Simplified Chinese. Grant the app read and write access to the backup folder in fnOS app settings.
 - The app serves its bilingual interface on port `8315`. Configuration, sync state, and `app.log` live in the fnOS package data directory (`TRIM_PKGVAR`).
+- Sign in as `canon` using the generated password in `TRIM_PKGVAR/api-password`. If the app window does not show a login prompt, open `http://<NAS IP>:8315` directly in a browser.
 
 ## API
 
@@ -109,4 +111,4 @@ Run `./fpk/build.sh` with `fnpack` available to build the frontend and package t
 | POST | `/api/files/restore?path=` | Include an ignored camera original in automatic backups again |
 | GET | `/api/pending` | List camera files that are pending backup |
 | GET | `/api/thumb?path=` | Fetch a camera thumbnail |
-| GET | `/api/preview?path=&size=` | Preview a file inside the backup folder |
+| GET | `/api/preview?id=&size=` | Preview a recorded backup using the `id` returned by `/api/files` |

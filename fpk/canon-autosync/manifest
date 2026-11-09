@@ -1,5 +1,5 @@
 appname="canon-autosync"
-version="1.1.0"
+version="1.2.0"
 display_name="佳能备份"
 desc="佳能相机照片增量备份到 NAS 指定目录，支持多版本 CCAPI 能力发现与自动降级。不同机型和固件的实测兼容情况见项目文档。部分机型首次使用需先激活 CCAPI，教程见 https://github.com/xiaokaiwangcc/canon-autosync"
 maintainer="canon-autosync"

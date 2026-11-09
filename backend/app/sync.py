@@ -2,9 +2,11 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 
+from .backup import BackupTarget, media_path, publish_backup, run_io
 from .ccapi import CanonCamera, CameraUnreachable, EventPollUnsupported, SyncStopped
 from .config import APP_VERSION, Config
 from .state import State
@@ -39,6 +41,7 @@ class SyncEngine:
         self._stop_requested = False
         self._camera_client: CanonCamera | None = None
         self._camera_address: tuple[str, int] | None = None
+        self._config_changed = asyncio.Event()
 
     def camera(self) -> CanonCamera:
         address = (self.config.camera_ip, self.config.camera_port)
@@ -47,20 +50,32 @@ class SyncEngine:
             self._camera_address = address
         return self._camera_client
 
-    def dest_for(self, cam_path: str) -> Path:
-        rel = cam_path.split("/contents/", 1)[-1]
-        return Path(self.config.nas_path) / rel
+    def apply_config(self, config: Config) -> None:
+        previous = self.config
+        self.config = config
+        if (previous.camera_ip, previous.camera_port) != (config.camera_ip, config.camera_port):
+            self.camera_files = []
+            self.camera_online = False
+            self.camera_warning = None
+            self._clear_info()
+        self.recount_pending()
+        self._config_changed.set()
 
     async def check_camera(self) -> bool:
+        config = self.config
         was_online = self.camera_online
         try:
             await self.camera().ping()
+            if config is not self.config:
+                return False
             self.camera_online = True
             if not was_online:
                 log.info("相机已连接：%s:%s", self.config.camera_ip, self.config.camera_port)
-            if self.state.last_error:
+            if not was_online and self.state.last_error:
                 self.state.set_error(None)  # 恢复连接后清除错误提示
         except CameraUnreachable as e:
+            if config is not self.config:
+                return False
             self.camera_online = False
             messages = self._unreachable_messages(e)
             if self.state.error_messages() != messages:
@@ -69,6 +84,8 @@ class SyncEngine:
                 self.state.set_error(*messages)
             self._clear_info()
         except Exception as e:
+            if config is not self.config:
+                return False
             self.camera_online = False
             log.exception("相机状态检查出错：%s", e)
             self.state.set_error(f"相机状态检查出错：{e}", f"Camera status check failed ({e}).")
@@ -104,6 +121,7 @@ class SyncEngine:
             "storage": None,
         }
         self._device_fetched = False
+        self._info_refreshed_at = 0.0
         self.event_listening = False
 
     async def refresh_camera_info(self, force: bool = False) -> None:
@@ -115,13 +133,18 @@ class SyncEngine:
           "name": "LP-E6NH", ...}（实测 R7 固件 1.8.0 返回 level=high），temperature 返回 {"status": "normal"}。
         归一化为前端语义档位 level/status 格式；CCAPI 只有档位无精确百分比，percentage 为档位估算值。
         """
+        config = self.config
         cam = self.camera()
+        info = self.camera_info
         if not self._device_fetched:
             try:
-                self.camera_info["device"] = await cam.device_info()
-                self._device_fetched = True
+                info["device"] = await cam.device_info()
+                if config is self.config:
+                    self._device_fetched = True
             except Exception:
-                self.camera_info["device"] = None
+                info["device"] = None
+        if config is not self.config:
+            return
         now = time.monotonic()
         if not force and now - self._info_refreshed_at < INFO_REFRESH_INTERVAL:
             return
@@ -146,25 +169,25 @@ class SyncEngine:
             level = level_map.get(raw_level, "unknown")
             if level == "unknown":
                 log.warning("未识别的电池档位 %r，原始响应：%s", raw_level, raw)
-            self.camera_info["battery"] = {
+            info["battery"] = {
                 "level": level,
                 "percentage": pct_map.get(raw_level) if raw_level is not None else None,
                 "name": raw.get("name"),  # 携带电池型号（如 LP-E6NH），前端展示用
             }
         except Exception:
-            self.camera_info["battery"] = None
+            info["battery"] = None
         try:
             raw = await cam.temperature()
             # 新固件 status 键，旧固件 temperature 键，取值语义相同（normal/high/error）
-            self.camera_info["temperature"] = {
+            info["temperature"] = {
                 "status": raw.get("status") or raw.get("temperature") or "unknown",
             }
         except Exception:
-            self.camera_info["temperature"] = None
+            info["temperature"] = None
         try:
-            self.camera_info["storage"] = await cam.storage()
+            info["storage"] = await cam.storage()
         except Exception:
-            self.camera_info["storage"] = None
+            info["storage"] = None
 
     async def _guard_health(self) -> tuple[str, str] | None:
         """同步前的健康检查，返回阻止同步的原因（None 表示允许）。"""
@@ -192,6 +215,8 @@ class SyncEngine:
             return {"skipped": True, "reason": "正在同步中，已跳过"}
         self._stop_requested = False
         self.syncing = True
+        config = self.config
+        target = BackupTarget.from_config(config)
         self.progress = {"current": None, "done": 0, "total": 0}
         try:
             health_error = await self._guard_health()
@@ -202,12 +227,7 @@ class SyncEngine:
             cam = self.camera()
             files = await cam.list_all_files()
             self.camera_files = files
-            pending = [
-                p for p in files
-                if Path(p).suffix.lower() in IMAGE_EXTS
-                and not self.state.is_synced(p)
-                and not self.state.is_ignored(p)  # 手动删除备份的文件不再自动传回
-            ]
+            pending = self.pending_files(target)
             self.pending_count = len(pending)
             self.progress["total"] = len(pending)
             if pending:
@@ -215,28 +235,24 @@ class SyncEngine:
             deleted = 0
             delete_failed = 0
             failed: list[tuple[str, str]] = []
-            for cam_path in pending:
+            for cam_path, file_id, _ in pending:
                 if self._stop_requested:
                     log.info("同步已手动停止（已完成 %d/%d）", self.progress["done"], len(pending))
                     return {"stopped": True}
                 try:
-                    dest = self.dest_for(cam_path)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
                     self.progress["current"] = cam_path
-                    size = await cam.download(
-                        cam_path, dest,
-                        should_stop=lambda: self._stop_requested,
-                        on_slow=self._warn_slow_transfer,
-                    )
-                    self.state.mark_synced(cam_path, size, str(dest))
+                    dest, size = await self._download(cam, target, cam_path, file_id)
+                    self.state.mark_synced(file_id, size, dest, href=cam_path, root=target.root)
                     log.info("已备份 %s → %s（%.1f MB）", cam_path, dest, size / 1024 / 1024)
                     if self.pending_count > 0:
                         self.pending_count -= 1
                     self.progress["done"] += 1
-                    if self.config.delete_after_sync:
+                    if config.delete_after_sync and not self._stop_requested:
                         try:
-                            await cam.delete(cam_path)
-                            deleted += 1
+                            await self.state.flush(force=True)
+                            if not self._stop_requested:
+                                await cam.delete(cam_path)
+                                deleted += 1
                         except Exception as e:
                             delete_failed += 1
                             log.warning("已备份但删除卡上文件失败：%s（%s）", cam_path, e)
@@ -246,7 +262,7 @@ class SyncEngine:
                             )
                 except SyncStopped:
                     raise
-                except (CameraUnreachable, httpx.HTTPError, OSError) as e:
+                except (CameraUnreachable, httpx.HTTPError, OSError, ValueError) as e:
                     # 一张文件失败不应阻塞整批；未标记为 synced，下一轮会继续重试。
                     failed.append((cam_path, str(e)))
                     log.warning("备份失败，跳过后继续：%s（%s）", cam_path, e)
@@ -280,10 +296,36 @@ class SyncEngine:
             self.state.set_error(msg, f"Sync failed ({e}).")
             return {"error": msg}
         finally:
-            self.syncing = False
             self.progress["current"] = None
-            # 任何退出路径都强制落盘一次，保证进度/错误/上次同步时间不丢失
-            await self.state.flush(force=True)
+            try:
+                await self.state.flush(force=True)
+            except OSError as error:
+                log.exception("同步记录保存失败")
+                self.state.set_error(f"同步记录保存失败：{error}", f"Could not save sync state ({error}).")
+            finally:
+                self.syncing = False
+
+    async def _download(self, cam: CanonCamera, target: BackupTarget, href: str, file_id: str) -> tuple[Path, int]:
+        dest = target.root / media_path(href)
+        await run_io(target.prepare_directory, dest)
+        temp = dest.with_name(f".canon-autosync-{uuid4().hex}.part")
+        try:
+            size = await cam.download(
+                href, temp,
+                should_stop=lambda: self._stop_requested,
+                on_slow=self._warn_slow_transfer,
+            )
+            if self._stop_requested:
+                raise SyncStopped()
+            published = await run_io(
+                publish_backup, target, temp, dest, file_id, self.state.destination_claimed,
+            )
+            return published, size
+        finally:
+            try:
+                await run_io(lambda: temp.unlink(missing_ok=True))
+            except OSError:
+                log.exception("无法删除未完成的下载：%s", temp)
 
     def _warn_slow_transfer(self, rate: float) -> None:
         """传输速率持续偏低：提示可能是 Wi-Fi 信号弱，不中止同步。"""
@@ -303,7 +345,7 @@ class SyncEngine:
         # 整个等待窗口复用同一连接：相机对新建连接的轮询立即返回空响应，
         # 只有复用连接长轮询才会真正挂起，事件才能秒级送达
         async with httpx.AsyncClient() as poll_client:
-            while time.monotonic() < deadline:
+            while time.monotonic() < deadline and not self._config_changed.is_set():
                 started = time.monotonic()
                 try:
                     events = await cam.event_poll(client=poll_client)
@@ -331,8 +373,11 @@ class SyncEngine:
     async def _loop(self):
         while True:
             try:
+                self._config_changed.clear()
                 if await self.check_camera():
                     await self.refresh_camera_info()
+                    if self._config_changed.is_set():
+                        continue
                     if self.config.auto_sync:
                         await self.sync_once()
                     if self.config.sync_on_event:
@@ -341,14 +386,23 @@ class SyncEngine:
                         self.event_listening = False
                         if changed:
                             continue  # 相机有变化，立即重新同步
+                        if self.sync_mode == "poll":
+                            await self._wait_for_config(self.config.poll_interval)
                     else:
-                        await asyncio.sleep(self.config.poll_interval)
+                        self.sync_mode = "poll"
+                        await self._wait_for_config(self.config.poll_interval)
                 else:
-                    await asyncio.sleep(5)
+                    await self._wait_for_config(5)
             except Exception as e:
                 # 兜底：任何未捕获异常都不能让主循环死亡
                 log.exception("同步主循环异常：%r", e)
                 await asyncio.sleep(5)
+
+    async def _wait_for_config(self, timeout: float) -> None:
+        try:
+            await asyncio.wait_for(self._config_changed.wait(), timeout)
+        except TimeoutError:
+            pass
 
     def request_stop(self) -> None:
         """请求停止当前同步（前端「停止同步」按钮触发，下一数据块到达时生效）。"""
@@ -357,21 +411,34 @@ class SyncEngine:
     def start(self):
         self._task = asyncio.create_task(self._loop())
 
-    def stop(self):
+    async def stop(self):
         if self._task:
             self._task.cancel()
+            await asyncio.gather(self._task, return_exceptions=True)
+            self._task = None
+
+    def pending_files(self, target: BackupTarget, include_ignored: bool = False) -> list[tuple[str, str, bool]]:
+        pending = {}
+        for href in self.camera_files:
+            if Path(href).suffix.lower() not in IMAGE_EXTS:
+                continue
+            try:
+                file_id = target.file_id(href)
+            except ValueError:
+                log.warning("跳过无效的相机文件路径：%r", href)
+                continue
+            ignored = self.state.is_ignored(file_id)
+            if not self.state.is_synced(file_id) and (include_ignored or not ignored):
+                pending.setdefault(file_id, (href, file_id, ignored))
+        return list(pending.values())
 
     def recount_pending(self) -> None:
         """已备份记录被清空后（如更换备份目录）重算待备份数，让 status 立即反映。"""
-        self.pending_count = len([
-            p for p in self.camera_files
-            if Path(p).suffix.lower() in IMAGE_EXTS
-            and not self.state.is_synced(p)
-            and not self.state.is_ignored(p)
-        ])
+        self.pending_count = len(self.pending_files(BackupTarget.from_config(self.config)))
 
     def status(self) -> dict:
         error, error_en = self.state.error_messages()
+        root = BackupTarget.from_config(self.config).root
         warning, warning_en = self.camera_warning or (None, None)
         return {
             "camera_online": self.camera_online,
@@ -392,9 +459,9 @@ class SyncEngine:
             "progress": self.progress,
             "camera_file_count": len(self.camera_files),
             "pending_count": self.pending_count,
-            "ignored_count": self.state.ignored_count,
+            "ignored_count": len(self.state.snapshot_ignored(root)),
             "version": APP_VERSION,
-            "synced_count": len(self.state.synced),
+            "synced_count": self.state.synced_count(root),
             "last_sync": self.state.last_sync,
             "last_error": error,
             "last_error_en": error_en,

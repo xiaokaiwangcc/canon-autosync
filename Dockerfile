@@ -14,7 +14,8 @@ ENV PYTHONUNBUFFERED=1 \
     LANG=C.UTF-8 \
     TZ=Asia/Shanghai \
     # 配置与同步记录目录（挂载持久化）
-    CANON_NAS_DATA=/data
+    CANON_NAS_DATA=/data \
+    CANON_REQUIRE_AUTH=1
 
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt

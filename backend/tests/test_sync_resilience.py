@@ -2,11 +2,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
 from app.ccapi import CapabilityUnsupported, CameraUnreachable, CanonCamera
 from app.config import Config
+from app.state import State
 from app.sync import SyncEngine
 
 
@@ -46,41 +48,6 @@ class _RoutingCamera(CanonCamera):
                 f"HTTP {result}", request=request, response=response,
             )
         return result
-
-
-class _State:
-    def __init__(self):
-        self.synced = {}
-        self.ignored = set()
-        self.last_error = None
-        self.last_error_en = None
-        self.last_sync = None
-
-    def is_synced(self, path):
-        return path in self.synced
-
-    @property
-    def ignored_count(self):
-        return len(self.ignored)
-
-    def is_ignored(self, path):
-        return path in self.ignored
-
-    def mark_synced(self, path, size, dest):
-        self.synced[path] = {"size": size, "dest": dest}
-
-    def set_last_sync(self):
-        self.last_sync = "now"
-
-    def set_error(self, message, english=None):
-        self.last_error = message
-        self.last_error_en = english
-
-    def error_messages(self):
-        return self.last_error, self.last_error_en
-
-    async def flush(self, force=False):
-        pass
 
 
 class _FakeCamera(CanonCamera):
@@ -226,25 +193,27 @@ class SyncResilienceTests(unittest.IsolatedAsyncioTestCase):
             "/ccapi/ver130/contents/sd/100CANON/IMG_0002.JPG",
             "/ccapi/ver130/contents/sd/100CANON/IMG_0003.JPG",
         ]
-        state = _State()
-        with tempfile.TemporaryDirectory() as backup_dir:
-            engine = SyncEngine(Config(nas_path=backup_dir), state)
+        with tempfile.TemporaryDirectory() as directory, patch("app.state.STATE_FILE", Path(directory) / "state.json"):
+            backup_dir = Path(directory) / "backup"
+            config = Config(nas_path=str(backup_dir))
+            state = State(config)
+            engine = SyncEngine(config, state)
             camera = _FakeCamera(paths, paths[1])
             engine.camera = lambda: camera
 
             result = await engine.sync_once()
-
-        self.assertEqual(camera.downloaded, paths)
-        self.assertEqual(result["downloaded"], 2)
-        self.assertEqual(result["failed"], 1)
-        self.assertEqual(set(state.synced), {paths[0], paths[2]})
-        self.assertIn("1 个文件备份失败", state.last_error)
-        self.assertIn("Failed backups (1)", engine.status()["last_error_en"])
+            self.assertEqual(camera.downloaded, paths)
+            self.assertEqual(result["downloaded"], 2)
+            self.assertEqual(result["failed"], 1)
+            self.assertEqual({meta["href"] for _, meta in state.snapshot_synced(backup_dir)}, {paths[0], paths[2]})
+            self.assertIn("1 个文件备份失败", state.last_error)
+            self.assertIn("Failed backups (1)", engine.status()["last_error_en"])
 
 
 class SyncEngineCameraTests(unittest.TestCase):
     def test_camera_client_is_reused_until_address_changes(self):
-        engine = SyncEngine(Config(), _State())
+        with tempfile.TemporaryDirectory() as directory, patch("app.state.STATE_FILE", Path(directory) / "state.json"):
+            engine = SyncEngine(Config(), State(Config()))
 
         first = engine.camera()
         self.assertIs(first, engine.camera())
