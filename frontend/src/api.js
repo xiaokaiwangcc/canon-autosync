@@ -7,7 +7,9 @@ async function req(path, options) {
       const body = await resp.json()
       if (body.detail) message = body.detail
     } catch { /* 非 JSON 响应，保留状态码 */ }
-    throw new Error(message)
+    const error = new Error(message)
+    error.status = resp.status
+    throw error
   }
   return resp.json()
 }

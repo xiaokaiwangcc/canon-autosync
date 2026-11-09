@@ -1,9 +1,12 @@
 # canon-autosync
 
+简体中文 | [English](README.en.md)
+
 自动把佳能相机（CCAPI）里的照片/视频增量备份到 NAS 指定目录，保持相机目录结构。Python(FastAPI) 后端 + React(Vite) 前端，可本地运行，也可打包为 macOS/Windows 桌面应用、Docker 容器或飞牛 fnOS 应用（.fpk）。参考 [laszewsk/canon-r7-ccapi](https://github.com/laszewsk/canon-r7-ccapi)。
 
 ## 功能特性
 
+- **中英文界面**：在「设置 → 关于 → 界面语言」切换，网页会记住当前浏览器中的选择
 - **秒级同步**：事件驱动监听相机，拍照/录视频后立即自动备份；事件驱动不可用时自动降级为定时扫描兜底（默认 60s，可配置）
 - **多版本 CCAPI**：自动发现相机公布的接口，按能力选择 endpoint；目录接口兼容 `ver100`–`ver140` 候选和普通/chunked 响应
 - **传输保护**：同步前健康检查（相机过热/低电量自动暂停）、传输速率监控（Wi-Fi 弱时提示）、缩略图请求并发限制 + 失败重试 + 多级缓存（内存/磁盘/浏览器），避免相机 CCAPI 被并发打挂（503）
