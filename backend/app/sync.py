@@ -29,7 +29,7 @@ class SyncEngine:
             "temperature": None,
             "storage": None,
         }
-        self.camera_warning: str | None = None
+        self.camera_warning: tuple[str, str] | None = None
         self.sync_mode = "poll"  # "event" 事件驱动 | "poll" 定时扫描
         self.event_listening = False
         self.pending_count = 0  # 待备份数量缓存，status() 直接读取，避免每次轮询全量遍历
@@ -56,27 +56,30 @@ class SyncEngine:
                 self.state.set_error(None)  # 恢复连接后清除错误提示
         except CameraUnreachable as e:
             self.camera_online = False
-            msg = self._unreachable_msg(e)
-            if self.state.last_error != msg:
+            messages = self._unreachable_messages(e)
+            if self.state.error_messages() != messages:
                 # 仅在提示变化时写入/记日志，避免离线段每 5 秒刷屏
                 log.warning("相机连接失败：%s", e)
-                self.state.set_error(msg)
+                self.state.set_error(*messages)
             self._clear_info()
         except Exception as e:
             self.camera_online = False
             log.exception("相机状态检查出错：%s", e)
-            self.state.set_error(f"相机状态检查出错：{e}")
+            self.state.set_error(f"相机状态检查出错：{e}", f"Camera status check failed ({e}).")
             self._clear_info()
         return self.camera_online
 
-    def _unreachable_msg(self, e: Exception) -> str:
-        """相机断连时的中文引导提示：先查 CCAPI 连通性，再查相机配置。"""
+    def _unreachable_messages(self, error: CameraUnreachable) -> tuple[str, str]:
         addr = f"http://{self.config.camera_ip}:{self.config.camera_port}"
         return (
-            f"相机连接失败（{e}）。请在浏览器中访问 {addr} 检查 CCAPI 是否通畅："
-            f"能打开说明网络正常，可点击「重试连接」；"
-            f"打不开请检查相机配置——相机是否开机并连接同一网络、"
-            f"相机菜单中是否已开启 CCAPI 网络设置、相机 IP 是否发生变化，修改后保存设置再重试。"
+            f"相机连接失败（{error}）。请在浏览器中访问 {addr} 检查 CCAPI 是否通畅："
+            "能打开说明网络正常，可点击「重试连接」；"
+            "打不开请检查相机配置——相机是否开机并连接同一网络、"
+            "相机菜单中是否已开启 CCAPI 网络设置、相机 IP 是否发生变化，修改后保存设置再重试。",
+            f"Could not connect to the camera. Open {addr}/ccapi/ in a browser to check CCAPI. "
+            "If it opens, select Reconnect. Otherwise, check that the camera is on the same network "
+            "with CCAPI enabled. If its IP address changed, update Settings and reconnect. "
+            f"Camera response ({error.english})",
         )
 
     async def reconnect(self) -> bool:
@@ -157,17 +160,23 @@ class SyncEngine:
         except Exception:
             self.camera_info["storage"] = None
 
-    async def _guard_health(self) -> str | None:
+    async def _guard_health(self) -> tuple[str, str] | None:
         """同步前的健康检查，返回阻止同步的原因（None 表示允许）。"""
         temp = self.camera_info.get("temperature") or {}
         if temp.get("status") in ("high", "error"):
-            return f"相机温度过高（{temp.get('status')}），暂停同步以防止过热断连"
+            return (
+                f"相机温度过高（{temp.get('status')}），暂停同步以防止过热断连",
+                "Sync paused. Let the camera cool down before resuming.",
+            )
         batt = self.camera_info.get("battery") or {}
         if batt.get("level") == "empty":
-            return "相机电量耗尽，暂停同步"
+            return "相机电量耗尽，暂停同步", "Sync paused because the camera battery is empty."
         # CCAPI 只有三档电量，无 "low" 档："middle"（中等）即应提醒充电
         if batt.get("level") in ("middle", "low"):
-            self.camera_warning = "相机电量不足，建议连接充电器后再进行大批量传输"
+            self.camera_warning = (
+                "相机电量不足，建议连接充电器后再进行大批量传输",
+                "The camera battery is low. Connect a charger before transferring large batches.",
+            )
         else:
             self.camera_warning = None
         return None
@@ -179,11 +188,11 @@ class SyncEngine:
         self.syncing = True
         self.progress = {"current": None, "done": 0, "total": 0}
         try:
-            reason = await self._guard_health()
-            if reason:
-                log.warning("同步被暂停：%s", reason)
-                self.state.set_error(reason)
-                return {"error": reason}
+            health_error = await self._guard_health()
+            if health_error:
+                log.warning("同步被暂停：%s", health_error[0])
+                self.state.set_error(*health_error)
+                return {"error": health_error[0]}
             cam = self.camera()
             files = await cam.list_all_files()
             self.camera_files = files
@@ -225,7 +234,10 @@ class SyncEngine:
                         except Exception as e:
                             delete_failed += 1
                             log.warning("已备份但删除卡上文件失败：%s（%s）", cam_path, e)
-                            self.camera_warning = f"已备份但删除卡上文件失败：{cam_path}（{e}）"
+                            self.camera_warning = (
+                                f"已备份但删除卡上文件失败：{cam_path}（{e}）",
+                                f"Backup complete, but the camera could not delete {cam_path} ({e}).",
+                            )
                 except SyncStopped:
                     raise
                 except (CameraUnreachable, httpx.HTTPError, OSError) as e:
@@ -234,7 +246,11 @@ class SyncEngine:
                     log.warning("备份失败，跳过后继续：%s（%s）", cam_path, e)
             self.state.set_last_sync()
             if failed:
-                self.state.set_error(f"{len(failed)} 个文件备份失败，将在下次同步时重试：{failed[0][0]}")
+                count, first_path = len(failed), failed[0][0]
+                self.state.set_error(
+                    f"{count} 个文件备份失败，将在下次同步时重试：{first_path}",
+                    f"Failed backups ({count}). The next sync will retry the affected files, including {first_path}.",
+                )
             else:
                 self.state.set_error(None)
             result = {"downloaded": self.progress["done"], "failed": len(failed), "deleted": deleted}
@@ -248,14 +264,14 @@ class SyncEngine:
             return {"stopped": True}
         except CameraUnreachable as e:
             self.camera_online = False
-            msg = self._unreachable_msg(e)
+            messages = self._unreachable_messages(e)
             log.warning("同步中断：相机连接失败（%s）", e)
-            self.state.set_error(msg)
-            return {"error": msg}
+            self.state.set_error(*messages)
+            return {"error": messages[0]}
         except Exception as e:
             msg = f"同步出错：{e}"
             log.exception("同步出错：%s", e)
-            self.state.set_error(msg)
+            self.state.set_error(msg, f"Sync failed ({e}).")
             return {"error": msg}
         finally:
             self.syncing = False
@@ -268,7 +284,9 @@ class SyncEngine:
         log.warning("传输速率偏低（%.0f KB/s），可能是 Wi-Fi 信号弱", rate / 1024)
         self.camera_warning = (
             f"传输速率偏低（{rate / 1024:.0f} KB/s），可能是 Wi-Fi 信号弱，"
-            "建议将相机靠近路由器后再继续大批量备份"
+            "建议将相机靠近路由器后再继续大批量备份",
+            f"Slow transfer ({rate / 1024:.0f} KB/s). The Wi-Fi signal may be weak. "
+            "Move the camera closer to the router before transferring large batches.",
         )
 
     async def _event_wait(self) -> bool:
@@ -347,12 +365,15 @@ class SyncEngine:
         ])
 
     def status(self) -> dict:
+        error, error_en = self.state.error_messages()
+        warning, warning_en = self.camera_warning or (None, None)
         return {
             "camera_online": self.camera_online,
             "camera_ip": self.config.camera_ip,
             "camera_port": self.config.camera_port,
             "camera": self.camera_info,
-            "camera_warning": self.camera_warning,
+            "camera_warning": warning,
+            "camera_warning_en": warning_en,
             "sync_mode": self.sync_mode,
             "event_listening": self.event_listening,
             "nas_path": self.config.nas_path,
@@ -368,5 +389,6 @@ class SyncEngine:
             "version": APP_VERSION,
             "synced_count": len(self.state.synced),
             "last_sync": self.state.last_sync,
-            "last_error": self.state.last_error,
+            "last_error": error,
+            "last_error_en": error_en,
         }

@@ -33,10 +33,15 @@ class _State:
         self.synced = {}
         self.ignored = set()
         self.last_error = None
+        self.last_error_en = None
         self.last_sync = None
 
     def is_synced(self, path):
         return path in self.synced
+
+    @property
+    def ignored_count(self):
+        return len(self.ignored)
 
     def is_ignored(self, path):
         return path in self.ignored
@@ -47,8 +52,12 @@ class _State:
     def set_last_sync(self):
         self.last_sync = "now"
 
-    def set_error(self, message):
+    def set_error(self, message, english=None):
         self.last_error = message
+        self.last_error_en = english
+
+    def error_messages(self):
+        return self.last_error, self.last_error_en
 
     async def flush(self, force=False):
         pass
@@ -118,3 +127,4 @@ class SyncResilienceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(set(state.synced), {paths[0], paths[2]})
         self.assertIn("1 个文件备份失败", state.last_error)
+        self.assertIn("Failed backups (1)", engine.status()["last_error_en"])

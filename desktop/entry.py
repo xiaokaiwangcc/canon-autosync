@@ -95,7 +95,7 @@ def main() -> None:
 
     # 窗口图标由打包产物的图标提供（Windows: exe 图标；macOS: .app 图标）
     webview.create_window(
-        "佳能备份",
+        "Canon AutoSync",
         f"http://127.0.0.1:{port}",
         width=1280,
         height=800,

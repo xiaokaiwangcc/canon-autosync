@@ -18,7 +18,9 @@ LOW_SPEED_THRESHOLD = 256 * 1024
 
 
 class CameraUnreachable(Exception):
-    pass
+    def __init__(self, message: str = "", *, english: str | None = None):
+        super().__init__(message)
+        self.english = message if english is None else english
 
 
 class SyncStopped(Exception):
@@ -53,7 +55,8 @@ class CanonCamera:
                 if e.response.status_code < 500:
                     raise
                 last_err = CameraUnreachable(
-                    f"相机 CCAPI 未就绪（HTTP {e.response.status_code}），相机服务可能仍在启动中"
+                    f"相机 CCAPI 未就绪（HTTP {e.response.status_code}），相机服务可能仍在启动中",
+                    english=f"Camera CCAPI is unavailable (HTTP {e.response.status_code}). It may still be starting.",
                 )
             except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
                 last_err = CameraUnreachable(str(e))
@@ -146,10 +149,10 @@ class CanonCamera:
                 break
             chunk, offset = decoder.raw_decode(body, offset)
             if not isinstance(chunk, dict):
-                raise ValueError("相机目录列表格式错误：每个分段必须是 JSON 对象")
+                raise ValueError("Each CCAPI directory response chunk must be a JSON object")
             chunk_paths = chunk.get("path", [])
             if not isinstance(chunk_paths, list):
-                raise ValueError("相机目录列表格式错误：path 必须是数组")
+                raise ValueError("The path field in a CCAPI directory response must be an array")
             paths.extend(chunk_paths)
         return paths
 
