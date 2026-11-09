@@ -1,4 +1,5 @@
 import json
+import locale
 import os
 import tempfile
 from pathlib import Path
@@ -25,11 +26,20 @@ class Config(BaseModel):
     poll_interval: int = Field(60, ge=1)  # 兜底扫描间隔（秒）
 
 
+def read_json(path: Path) -> dict:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # Older Windows builds wrote JSON using the system code page.
+        content = path.read_text(encoding=locale.getpreferredencoding(False))
+    return json.loads(content)
+
+
 def load_config() -> Config:
     env_ip = os.environ.get("CANON_IP")
     env_nas = os.environ.get("NAS_PATH")
     if CONFIG_FILE.exists():
-        cfg = Config(**json.loads(CONFIG_FILE.read_text()))
+        cfg = Config(**read_json(CONFIG_FILE))
     else:
         cfg = Config()
     if env_ip:

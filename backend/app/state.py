@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .backup import BackupTarget, _sync_directory, run_io
-from .config import DATA_DIR, Config
+from .config import DATA_DIR, Config, read_json
 
 log = logging.getLogger("state")
 
@@ -28,7 +28,7 @@ class State:
         self._last_flush = 0.0
         self._retry_scheduled = False  # 是否已安排节流到期后的补写
         if STATE_FILE.exists():
-            self._data = json.loads(STATE_FILE.read_text())
+            self._data = read_json(STATE_FILE)
             self._data.setdefault("ignored", {} if "version" in self._data else [])
         else:
             self._data = {"version": 2, "synced": {}, "last_sync": None, "last_error": None, "ignored": {}}

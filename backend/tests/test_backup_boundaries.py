@@ -12,7 +12,7 @@ import httpx
 from app import access, main
 from app.backup import BackupTarget, media_path
 from app.ccapi import CanonCamera, EventPollUnsupported
-from app.config import Config
+from app.config import Config, load_config, save_config
 from app.state import State
 from app.sync import SyncEngine
 
@@ -347,3 +347,18 @@ class BackupBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(access.api_password(), password)
             if os.name != "nt":
                 self.assertEqual((self.workspace / "api-password").stat().st_mode & 0o777, 0o600)
+
+    def test_legacy_system_encoding_is_read_and_rewritten_as_utf8(self):
+        config_file = self.workspace / "config.json"
+        config_file.write_bytes(json.dumps({"nas_path": "café"}, ensure_ascii=False).encode("cp1252"))
+        with (
+            patch("app.config.CONFIG_FILE", config_file),
+            patch("app.config.locale.getpreferredencoding", return_value="cp1252"),
+            patch.dict(os.environ, {"NAS_PATH": "", "CANON_IP": ""}),
+        ):
+            loaded = load_config()
+            self.assertEqual(loaded.nas_path, "café")
+            loaded.nas_path = "照片"
+            save_config(loaded)
+            self.assertEqual(load_config().nas_path, "照片")
+            self.assertIn("照片", config_file.read_text(encoding="utf-8"))
