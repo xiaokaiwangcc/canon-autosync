@@ -141,11 +141,11 @@ button.ghost:hover { border-color: #9ca3af; background: transparent; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
 .field label { display: block; font-size: 11px; color: #6b7280; margin-bottom: 3px; }
-.field input {
+.field input, .field select {
   width: 100%; background: #f8f9fb; border: 1px solid #d1d5db; border-radius: 7px;
   color: #1f2430; padding: 6px 10px; font-size: 13px; outline: none;
 }
-.field input:focus { border-color: #3b82f6; background: #ffffff; }
+.field input:focus, .field select:focus { border-color: #3b82f6; background: #ffffff; }
 .field.full { grid-column: 1 / -1; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .check input { width: auto; }
@@ -590,7 +590,7 @@ tr:hover td { background: #f6f7f9; }
   td:first-child, th:first-child { white-space: normal; }
 
   /* iOS：输入框字号 <16px 聚焦时会自动放大页面 */
-  .field input, .search-box input { font-size: 16px; }
+  .field input, .field select, .search-box input { font-size: 16px; }
 
   /* 文件页工具栏换行，搜索框占满一行 */
   .tabs-row { flex-wrap: wrap; }

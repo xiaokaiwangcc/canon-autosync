@@ -134,10 +134,15 @@ class State:
             self._data["last_sync"] = datetime.now().isoformat(timespec="seconds")
             self._schedule_flush()
 
-    def set_error(self, msg):
+    def set_error(self, msg: str | None, english: str | None = None):
         with self._lock:
             self._data["last_error"] = msg
+            self._data["last_error_en"] = english
             self._schedule_flush()
+
+    def error_messages(self) -> tuple[str | None, str | None]:
+        with self._lock:
+            return self._data["last_error"], self._data.get("last_error_en")
 
     def snapshot_synced(self) -> list:
         """返回已同步记录快照（list of (path, meta)），供线程池中的路由安全遍历。"""

@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { api } from './api'
+import { useLanguage } from './language'
 
 function fmtSize(bytes) {
   if (bytes == null) return '-'
@@ -19,32 +20,33 @@ function fmtTime(iso) {
 }
 
 const BATTERY_META = {
-  high: { label: '充足', color: '#16a34a' },
-  middle: { label: '中等', color: '#ca8a04' },
-  low: { label: '偏低', color: '#ea580c' },
-  empty: { label: '耗尽', color: '#dc2626' },
-  ac: { label: '外接电源', color: '#16a34a' },
+  high: { label: 'batteryHigh', color: '#16a34a' },
+  middle: { label: 'batteryMiddle', color: '#ca8a04' },
+  low: { label: 'batteryLow', color: '#ea580c' },
+  empty: { label: 'batteryEmpty', color: '#dc2626' },
+  ac: { label: 'externalPower', color: '#16a34a' },
 }
 
 const TEMP_META = {
-  normal: { label: '正常', color: '#16a34a' },
-  high: { label: '偏高', color: '#ea580c' },
-  error: { label: '过热', color: '#dc2626' },
+  normal: { label: 'temperatureNormal', color: '#16a34a' },
+  high: { label: 'temperatureHigh', color: '#ea580c' },
+  error: { label: 'overheating', color: '#dc2626' },
 }
 
 function StatusBadge({ status }) {
+  const { t } = useLanguage()
   const { camera_online, sync_mode, event_listening, syncing } = status
-  let text = '相机离线'
+  let text = t('cameraOffline')
   let cls = 'offline'
   if (camera_online) {
     if (syncing) {
-      text = '同步中…'
+      text = t('syncing')
       cls = 'syncing'
     } else if (sync_mode === 'event') {
-      text = event_listening ? '已连接 · 监听拍摄中' : '已连接'
+      text = event_listening ? t('connectedListening') : t('connected')
       cls = 'online'
     } else {
-      text = '已连接 · 定时扫描'
+      text = t('connectedPolling')
       cls = 'online'
     }
   }
@@ -71,7 +73,6 @@ function Icon({ paths, size = 16 }) {
 const NAV_ITEMS = [
   {
     id: 'camera',
-    label: '相机',
     icon: (
       <>
         <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -81,7 +82,6 @@ const NAV_ITEMS = [
   },
   {
     id: 'files',
-    label: '文件',
     icon: (
       <>
         <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
@@ -91,7 +91,6 @@ const NAV_ITEMS = [
   },
   {
     id: 'settings',
-    label: '设置',
     icon: (
       <>
         <line x1="4" y1="21" x2="4" y2="14" />
@@ -108,19 +107,14 @@ const NAV_ITEMS = [
   },
 ]
 
-const PAGE_TITLES = {
-  camera: '相机',
-  files: '文件',
-  settings: '设置',
-}
-
 const PAGE_SUBTITLES = {
-  camera: '设备状态与同步进度',
-  files: '存储卡内容浏览与备份管理',
-  settings: '连接与备份参数',
+  camera: 'cameraSubtitle',
+  files: 'filesSubtitle',
+  settings: 'settingsSubtitle',
 }
 
 function Sidebar({ page, onNavigate, status }) {
+  const { t } = useLanguage()
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -135,7 +129,7 @@ function Sidebar({ page, onNavigate, status }) {
             onClick={() => onNavigate(item.id)}
           >
             <Icon paths={item.icon} />
-            {item.label}
+            {t(item.id)}
           </button>
         ))}
       </nav>
@@ -143,9 +137,9 @@ function Sidebar({ page, onNavigate, status }) {
         <div className="conn-card">
           <div className="foot-item conn-status">
             <span className={`foot-dot ${status.camera_online ? 'on' : ''}`} />
-            <b>{status.camera_online ? '已连接' : '未连接'}</b>
+            <b>{status.camera_online ? t('connected') : t('disconnected')}</b>
             <span className="muted" style={{ marginLeft: 'auto' }}>
-              {status.poll_interval}s 轮询
+              {t('pollingInterval', { seconds: status.poll_interval })}
             </span>
           </div>
           {status.camera?.device?.productname && (
@@ -156,7 +150,7 @@ function Sidebar({ page, onNavigate, status }) {
           </div>
         </div>
         <div className="foot-item muted" style={{ marginTop: 8 }}>
-          自动同步{status.auto_sync ? '已开启' : '已关闭'} · {status.sync_mode === 'event' ? '秒级同步' : '定时扫描'}
+          {t(status.auto_sync ? 'autoSyncOn' : 'autoSyncOff')} · {status.sync_mode === 'event' ? t('eventSync') : t('scheduledScans')}
         </div>
         {status.version && <div className="app-version">v{status.version}</div>}
       </div>
@@ -199,6 +193,7 @@ const ICON_SD = (
 )
 
 function CameraPanel({ status }) {
+  const { t } = useLanguage()
   const cam = status.camera || {}
   const device = cam.device || {}
   const storages = (cam.storage || {}).storagelist || []
@@ -211,17 +206,17 @@ function CameraPanel({ status }) {
         </div>
         <div className="hero-info">
           <div className="hero-name-row">
-            <span className="hero-name">{device.productname || '未识别相机'}</span>
+            <span className="hero-name">{device.productname || t('unknownCamera')}</span>
             {device.firmwareversion && <span className="chip">FW {device.firmwareversion}</span>}
           </div>
           <div className="muted">
             {status.camera_online
-              ? `CCAPI 已连接 · ${status.sync_mode === 'event' ? '事件驱动' : '无线传输'}`
-              : '相机未连接'}
+              ? t('ccapiConnected', { mode: t(status.sync_mode === 'event' ? 'eventDriven' : 'wirelessTransfer') })
+              : t('cameraDisconnected')}
           </div>
         </div>
         {status.camera_online && (
-          <span className="badge online hero-badge"><span className="dot" />在线</span>
+          <span className="badge online hero-badge"><span className="dot" />{t('online')}</span>
         )}
       </div>
       {storages.map((s) => (
@@ -229,11 +224,11 @@ function CameraPanel({ status }) {
           <div className="row" style={{ marginBottom: 8 }}>
             <span className="label" style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               <Icon paths={ICON_SD} size={14} />
-              存储卡 {s.name}
-              {s.accesscapability === 'readonly' && <span className="tag readonly">只读</span>}
+              {t('memoryCard', { name: s.name })}
+              {s.accesscapability === 'readonly' && <span className="tag readonly">{t('readOnly')}</span>}
             </span>
             <span className="muted">
-              {fmtSize(s.spacesize)} 可用 / {fmtSize(s.maxsize)} · {s.contentsnumber} 个文件
+              {t('memoryCardSpace', { free: fmtSize(s.spacesize), total: fmtSize(s.maxsize), count: s.contentsnumber })}
             </span>
           </div>
           <div className="capacity-bar red">
@@ -246,22 +241,23 @@ function CameraPanel({ status }) {
 }
 
 function InfoCards({ status }) {
+  const { t } = useLanguage()
   const cam = status.camera || {}
   const device = cam.device || {}
   const batt = cam.battery || {}
   const temp = cam.temperature || {}
-  const battMeta = BATTERY_META[batt.level] || { label: '—', color: '#9ca3af' }
-  const tempMeta = TEMP_META[temp.status] || { label: '—', color: '#9ca3af' }
+  const battMeta = BATTERY_META[batt.level] || { color: '#9ca3af' }
+  const tempMeta = TEMP_META[temp.status] || { color: '#9ca3af' }
   const battPct = typeof batt.percentage === 'number' ? batt.percentage : null
 
   const cards = [
     {
       icon: ICON_BATTERY,
-      label: '电量',
+      label: t('battery'),
       body: (
         <>
           <div className="info-value">
-            {battPct != null ? `${battPct}%` : battMeta.label}
+            {battPct != null ? `${battPct}%` : (battMeta.label ? t(battMeta.label) : '—')}
             {batt.name && <span className="info-sub">{batt.name}</span>}
           </div>
           <div className="capacity-bar" style={{ background: '#eef0f3' }}>
@@ -272,30 +268,30 @@ function InfoCards({ status }) {
     },
     {
       icon: ICON_THERMOMETER,
-      label: '机身温度',
+      label: t('cameraTemperature'),
       body: (
         <>
           <div className="info-value" style={{ color: tempMeta.color }}>
             <span className="cam-dot" style={{ background: tempMeta.color, boxShadow: `0 0 6px ${tempMeta.color}` }} />
-            {tempMeta.label}
+            {tempMeta.label ? t(tempMeta.label) : '—'}
           </div>
-          <div className="muted">持续传输温度监控</div>
+          <div className="muted">{t('temperatureHint')}</div>
         </>
       ),
     },
     {
       icon: ICON_FINGERPRINT,
-      label: '序列号',
+      label: t('serialNumber'),
       body: (
         <>
           <div className="info-value mono">{device.serialnumber || '—'}</div>
-          <div className="muted">机身唯一标识</div>
+          <div className="muted">{t('serialHint')}</div>
         </>
       ),
     },
     {
       icon: ICON_WIFI,
-      label: 'MAC 地址',
+      label: t('macAddress'),
       body: (
         <>
           <div className="info-value mono">{device.macaddress || '—'}</div>
@@ -351,11 +347,12 @@ const ICON_CLOCK = (
 )
 
 function Stats({ status }) {
+  const { t } = useLanguage()
   const items = [
-    { icon: ICON_FILE_CHECK, label: '已备份', value: status.synced_count, cls: 'green' },
-    { icon: ICON_HOURGLASS, label: '待备份', value: status.pending_count, cls: 'amber' },
-    { icon: ICON_FILES, label: '相机文件总数', value: status.camera_file_count, cls: 'blue' },
-    { icon: ICON_CLOCK, label: '上次同步', value: fmtTime(status.last_sync), cls: 'gray', small: true },
+    { icon: ICON_FILE_CHECK, label: t('backedUp'), value: status.synced_count, cls: 'green' },
+    { icon: ICON_HOURGLASS, label: t('pendingBackup'), value: status.pending_count, cls: 'amber' },
+    { icon: ICON_FILES, label: t('cameraFileCount'), value: status.camera_file_count, cls: 'blue' },
+    { icon: ICON_CLOCK, label: t('lastSync'), value: fmtTime(status.last_sync), cls: 'gray', small: true },
   ]
   return (
     <div className="stat-grid">
@@ -378,11 +375,12 @@ function Stats({ status }) {
 const ICON_BOLT = <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
 
 function SyncProgress({ status, onSync, onStop }) {
+  const { t } = useLanguage()
   const { progress, syncing } = status
   const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
   const modeText = status.sync_mode === 'event'
-    ? `事件驱动 · 监听中${status.event_listening ? '' : '（重连中）'} · 超过 ${status.poll_interval}s 无事件自动兜底扫描`
-    : `自动同步 · 每 ${status.poll_interval}s 扫描`
+    ? t(status.event_listening ? 'eventListening' : 'eventReconnecting', { seconds: status.poll_interval })
+    : t('pollingSync', { seconds: status.poll_interval })
   // 进度 60s 无变化且仍在同步中 → 判定卡住，提示相机可能已断线并提供停止入口
   const [stalled, setStalled] = useState(false)
   useEffect(() => {
@@ -396,23 +394,23 @@ function SyncProgress({ status, onSync, onStop }) {
       <div className="row" style={{ marginBottom: 10 }}>
         <h2 style={{ margin: 0, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span className="sync-icon"><Icon paths={ICON_BOLT} size={14} /></span>
-          {syncing ? '正在同步' : '同步'}
+          {syncing ? t('syncingTitle') : t('sync')}
         </h2>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {progress.total > 0 && (
             <span className="progress-count">{progress.done} / {progress.total}</span>
           )}
           {syncing && stalled && (
-            <button className="ghost" onClick={onStop}>停止同步</button>
+            <button className="ghost" onClick={onStop}>{t('stopSync')}</button>
           )}
           <button onClick={onSync} disabled={syncing || !status.camera_online}>
-            {syncing ? '同步中…' : '立即同步'}
+            {syncing ? t('syncing') : t('syncNow')}
           </button>
         </div>
       </div>
       {syncing && stalled && (
         <div className="warning" style={{ margin: '8px 0' }}>
-          同步已 60 秒无进展，相机可能已断线。可点击「停止同步」后重试连接。
+          {t('stalledSync')}
         </div>
       )}
       {(syncing || progress.total > 0) && (
@@ -426,10 +424,10 @@ function SyncProgress({ status, onSync, onStop }) {
         <div className="current-path">{progress.current}</div>
       )}
       <div className="muted sync-footer">
-        备份目录 <span className="mono">{status.nas_path}</span>
+        {t('backupFolder')} <span className="mono">{status.nas_path}</span>
         {status.auto_sync && <><span className="foot-dot on" style={{ marginLeft: 10 }} />{modeText}</>}
-        {!status.auto_sync && ' · 自动同步：关'}
-        {status.delete_after_sync && ' · 同步后清理卡上文件：开'}
+        {!status.auto_sync && <> · {t('autoSyncOff')}</>}
+        {status.delete_after_sync && <> · {t('deleteAfterSyncOn')}</>}
       </div>
     </div>
   )
@@ -443,6 +441,7 @@ const ICON_CHECK_CIRCLE = (
 )
 
 function RecentTransfers() {
+  const { t } = useLanguage()
   const [items, setItems] = useState([])
   useEffect(() => {
     // 过滤掉文件已从备份目录删除的记录，只展示仍可查看的最近传输
@@ -453,7 +452,7 @@ function RecentTransfers() {
   }, [])
   return (
     <div className="card recent-card">
-      <h2>最近传输</h2>
+      <h2>{t('recentTransfers')}</h2>
       <div className="recent-list">
         {items.map((f) => (
           <div className="recent-item" key={f.path}>
@@ -465,7 +464,7 @@ function RecentTransfers() {
             <span className="recent-meta">{(f.synced_at || '').replace('T', ' ').slice(11)}</span>
           </div>
         ))}
-        {items.length === 0 && <div className="muted" style={{ padding: '14px 0' }}>暂无传输记录</div>}
+        {items.length === 0 && <div className="muted" style={{ padding: '14px 0' }}>{t('noTransfers')}</div>}
       </div>
     </div>
   )
@@ -531,6 +530,7 @@ function Toggle({ checked, onChange, label, desc }) {
         type="button"
         className={`switch${checked ? ' on' : ''}`}
         onClick={() => onChange(!checked)}
+        aria-label={label}
         aria-pressed={checked}
       >
         <span className="knob" />
@@ -540,6 +540,7 @@ function Toggle({ checked, onChange, label, desc }) {
 }
 
 function ConfigForm({ version }) {
+  const { language, setLanguage, t } = useLanguage()
   const [cfg, setCfg] = useState(null)
   const [saved, setSaved] = useState(false)
 
@@ -552,7 +553,7 @@ function ConfigForm({ version }) {
 
   const submit = async (e) => {
     e.preventDefault()
-    if (cfg.delete_after_sync && !window.confirm('开启后，每个文件备份完成会立即从存储卡删除，且无法恢复。确认开启？')) {
+    if (cfg.delete_after_sync && !window.confirm(t('confirmDeleteAfterSync'))) {
       return
     }
     await api.saveConfig({ ...cfg, camera_port: Number(cfg.camera_port), poll_interval: Number(cfg.poll_interval) })
@@ -561,7 +562,7 @@ function ConfigForm({ version }) {
   }
 
   const resetDefaults = () => {
-    if (!window.confirm('恢复为默认设置？当前修改将丢失。')) return
+    if (!window.confirm(t('confirmReset'))) return
     setCfg({ ...cfg, ...DEFAULT_CFG })
   }
 
@@ -569,65 +570,76 @@ function ConfigForm({ version }) {
     <form className="settings-form" onSubmit={submit}>
       <div className="settings-grid">
         <div className="settings-col">
-          <SectionCard icon={ICON_WIFI} title="相机连接" subtitle="通过 CCAPI 与相机建立无线连接">
+          <SectionCard icon={ICON_WIFI} title={t('cameraConnection')} subtitle={t('cameraConnectionHint')}>
             <div className="form-grid">
               <div className="field" style={{ gridColumn: 'span 1', flex: 3 }}>
-                <label>相机 IP</label>
+                <label>{t('cameraIp')}</label>
                 <input className="mono" value={cfg.camera_ip} onChange={(e) => set('camera_ip', e.target.value)} />
               </div>
               <div className="field" style={{ maxWidth: 120 }}>
-                <label>端口</label>
+                <label>{t('port')}</label>
                 <input className="mono" type="number" value={cfg.camera_port} onChange={(e) => set('camera_port', e.target.value)} />
               </div>
             </div>
           </SectionCard>
-<SectionCard icon={ICON_REFRESH} title="同步策略" subtitle="控制备份目录与自动同步行为">
+          <SectionCard icon={ICON_REFRESH} title={t('syncPreferences')} subtitle={t('syncPreferencesHint')}>
             <div className="field">
-              <label>NAS 备份目录</label>
+              <label>{t('nasFolder')}</label>
               <input className="mono" value={cfg.nas_path} onChange={(e) => set('nas_path', e.target.value)} placeholder="/Volumes/photos/canon-backup" />
-              <div className="field-hint">支持本地挂载路径或 SMB/NFS 挂载点</div>
+              <div className="field-hint">{t('nasFolderHint')}</div>
             </div>
             <div className="field" style={{ marginTop: 12 }}>
-              <label>兜底扫描间隔（秒）</label>
+              <label>{t('scanInterval')}</label>
               <input className="mono" type="number" min="10" value={cfg.poll_interval} onChange={(e) => set('poll_interval', e.target.value)} />
-              <div className="field-hint">事件驱动失效时按此间隔轮询相机文件列表</div>
+              <div className="field-hint">{t('scanIntervalHint')}</div>
             </div>
             <div className="toggle-group">
               <Toggle
                 checked={cfg.auto_sync}
                 onChange={(v) => set('auto_sync', v)}
-                label="自动同步"
-                desc="检测到新文件后自动开始备份"
+                label={t('autoSync')}
+                desc={t('autoSyncHint')}
               />
               <Toggle
                 checked={cfg.sync_on_event}
                 onChange={(v) => set('sync_on_event', v)}
-                label="事件驱动（拍照后秒级同步）"
-                desc="监听相机事件，按下快门后立即拉取文件"
+                label={t('eventSyncSetting')}
+                desc={t('eventSyncHint')}
               />
             </div>
           </SectionCard>
         </div>
 
         <div className="settings-col">
-          <SectionCard icon={ICON_SHIELD} title="高级" subtitle="高风险操作，请确认后开启">
+          <SectionCard icon={ICON_SHIELD} title={t('advanced')} subtitle={t('advancedHint')}>
             <div className="toggle-group" style={{ marginTop: 0 }}>
               <Toggle
                 checked={cfg.delete_after_sync}
                 onChange={(v) => set('delete_after_sync', v)}
-                label="同步后清理卡上文件"
-                desc="备份校验通过后自动删除存储卡上的原文件"
+                label={t('deleteAfterSync')}
+                desc={t('deleteAfterSyncHint')}
               />
             </div>
           </SectionCard>
 
-          <SectionCard icon={ICON_INFO} title="关于" subtitle="版本与项目信息">
+          <SectionCard icon={ICON_INFO} title={t('about')} subtitle={t('aboutHint')}>
+            <div className="field">
+              <label htmlFor="interface-language">{t('language')}</label>
+              <select
+                id="interface-language"
+                value={language}
+                onChange={(e) => setLanguage(e.target.value)}
+              >
+                <option value="en" lang="en">English</option>
+                <option value="zh-CN" lang="zh-CN">简体中文</option>
+              </select>
+            </div>
             <div className="about-row">
-              <span className="muted">当前版本</span>
+              <span className="muted">{t('version')}</span>
               <span className="chip mono">{version ? `v${version}` : '—'}</span>
             </div>
             <div className="about-row">
-              <span className="muted">项目地址</span>
+              <span className="muted">{t('project')}</span>
               <a
                 className="about-link"
                 href="https://github.com/xiaokaiwangcc/canon-autosync"
@@ -642,9 +654,9 @@ function ConfigForm({ version }) {
         </div>
       </div>
       <div className="settings-actions">
-        <button type="button" className="ghost" onClick={resetDefaults}>恢复默认</button>
-        <button type="submit" className="btn-danger">保存设置</button>
-        {saved && <span className="muted" style={{ alignSelf: 'center' }}>已保存</span>}
+        <button type="button" className="ghost" onClick={resetDefaults}>{t('restoreDefaults')}</button>
+        <button type="submit" className="btn-danger">{t('saveSettings')}</button>
+        {saved && <span className="muted" style={{ alignSelf: 'center' }}>{t('saved')}</span>}
       </div>
     </form>
   )
@@ -655,6 +667,7 @@ const VIDEO_EXTS = ['mp4', 'mov']
 const RAW_EXTS = ['cr3', 'cr2', 'raw', 'nef', 'arw', 'dng']
 
 function PreviewModal({ items, index, onNavigate, onClose }) {
+  const { t } = useLanguage()
   const { src, name, missing = false, kind = 'preview' } = items[index]
   const ext = (name.split('.').pop() || '').toLowerCase()
   // RAW 走后端提取的内嵌 JPEG（待备份为相机缩略图），同样用 img 展示
@@ -686,21 +699,21 @@ function PreviewModal({ items, index, onNavigate, onClose }) {
         {/* 视频时标题栏上移，避开播放器控制条 */}
         <div className={`modal-head${isVideo ? ' video' : ''}`}>
           <span className="modal-title">{name.split('/').pop()} · {index + 1}/{items.length}</span>
-          <button className="modal-close" onClick={onClose}>×</button>
+          <button className="modal-close" onClick={onClose} aria-label={t('closePreview')}>×</button>
         </div>
         <div className="modal-body">
           {isImage && !failed && !missing && (
             <img key={src} src={src} alt={name} onError={() => setFailedSrc(src)} />
           )}
           {isVideo && !missing && <video key={src} src={src} controls autoPlay />}
-          {missing && <div className="muted">文件已从备份目录删除</div>}
+          {missing && <div className="muted">{t('missingFile')}</div>}
           {(failed || (!isImage && !isVideo)) && !missing && (
             <div className="muted">
-              {kind === 'preview' ? '文件不存在或已删除' : `该格式暂不支持预览（${ext || '未知'}）`}
+              {kind === 'preview' ? t('fileUnavailable') : t('unsupportedPreview', { extension: ext || t('unknownFormat') })}
             </div>
           )}
-          {hasPrev && <button className="modal-nav prev" onClick={nav(-1)}>‹</button>}
-          {hasNext && <button className="modal-nav next" onClick={nav(1)}>›</button>}
+          {hasPrev && <button className="modal-nav prev" onClick={nav(-1)} aria-label={t('previousFile')}>‹</button>}
+          {hasNext && <button className="modal-nav next" onClick={nav(1)} aria-label={t('nextFile')}>›</button>}
         </div>
       </div>
     </div>
@@ -718,6 +731,7 @@ const IconTrash = () => (
 )
 
 function Thumb({ src, name }) {
+  const { t } = useLanguage()
   const [attempt, setAttempt] = useState(0)
   const [failed, setFailed] = useState(false)
   // 503 等瞬时错误：失败后延时自动重试（换 key 强制重新加载），最多 2 次；仍失败可点击占位手动重试
@@ -737,7 +751,7 @@ function Thumb({ src, name }) {
     return (
       <div
         className={`thumb thumb-empty ${cls}`}
-        title={`${name}\n加载失败，点击重试`}
+        title={`${name}\n${t('thumbnailFailed')}`}
         onClick={() => { setFailed(false); setAttempt(0) }}
       />
     )
@@ -746,6 +760,7 @@ function Thumb({ src, name }) {
 }
 
 function FileList() {
+  const { t } = useLanguage()
   const [tab, setTab] = useState('synced')
   const [view, setView] = useState('grid')
   const [query, setQuery] = useState('')
@@ -796,7 +811,7 @@ function FileList() {
           setPending(p)
           setError(null)
         })
-        .catch(() => setError('列表加载失败，5 秒后自动重试'))
+        .catch(() => setError({ key: 'listLoadFailed' }))
         .finally(() => setLoaded(true))
     }
     load()
@@ -809,36 +824,40 @@ function FileList() {
     const name = camPath.split('/').pop()
     // 文件已不在备份目录：仅移除记录（后端同时加入忽略名单，相机上的原文件不再自动回传）
     const confirmMsg = missing
-      ? `移除记录「${name}」？文件已从备份目录删除，移除后相机上的原文件将不再自动备份。`
-      : `删除备份「${name}」？NAS 上的文件将被一并删除，且无法恢复。`
+      ? t('confirmRemoveRecord', { name })
+      : t('confirmDeleteBackup', { name })
     if (!window.confirm(confirmMsg)) return
     try {
       await api.deleteFile(camPath)
       setFiles((fs) => fs.filter((f) => f.path !== camPath))
     } catch {
-      setError('删除失败，请稍后重试')
+      setError({ key: 'deleteFailed' })
     }
   }
 
   // 一键移除全部已删除记录：仅清理 dest 已不存在的，存在的备份不受影响
   const cleanupMissing = async () => {
-    if (!window.confirm(`移除全部 ${missingCount} 条已删除记录？相机上的对应原文件将不再自动备份。`)) return
+    if (!window.confirm(t('confirmCleanupMissing', { count: missingCount }))) return
     try {
       await api.cleanupMissing()
       setFiles((fs) => fs.filter((f) => f.exists !== false))
     } catch (err) {
-      setError(`清理失败：${err.message}`)
+      setError({
+        key: 'cleanupFailed',
+        reason: err.status === 503 ? 'nasUnavailable' : null,
+        detail: err.message,
+      })
     }
   }
 
   // 批量清除手动删除留下的忽略记录：相机上仍存在的原文件将重新排队备份
   const clearIgnored = async () => {
-    if (!window.confirm(`清除全部 ${ignoredCount} 条手动删除记录？相机上仍存在的原文件将重新进入待备份并自动同步。`)) return
+    if (!window.confirm(t('confirmClearIgnored', { count: ignoredCount }))) return
     try {
       await api.clearIgnored()
       setPending((ps) => ps.map((p) => ({ ...p, ignored: false })))
     } catch (err) {
-      setError(`清除失败：${err.message}`)
+      setError({ key: 'clearFailed', detail: err.message })
     }
   }
 
@@ -858,7 +877,7 @@ function FileList() {
       await api.restoreFile(camPath)
       setPending((ps) => ps.map((p) => (p.path === camPath ? { ...p, ignored: false } : p)))
     } catch {
-      setError('恢复失败，请稍后重试')
+      setError({ key: 'restoreFailed' })
     }
   }
 
@@ -884,11 +903,11 @@ function FileList() {
         <div className="seg-tabs">
           <button className={tab === 'synced' ? 'active' : ''} onClick={() => setTab('synced')}>
             <Icon paths={ICON_CHECK_CIRCLE} size={13} />
-            已备份 <span className="seg-count">{files.length}</span>
+            {t('backedUp')} <span className="seg-count">{files.length}</span>
           </button>
           <button className={tab === 'pending' ? 'active' : ''} onClick={() => setTab('pending')}>
             <Icon paths={ICON_HOURGLASS} size={13} />
-            待备份 <span className="seg-count">{pending.filter((p) => !p.ignored).length}</span>
+            {t('pendingBackup')} <span className="seg-count">{pending.filter((p) => !p.ignored).length}</span>
           </button>
         </div>
         <div className="files-tools">
@@ -897,25 +916,25 @@ function FileList() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索文件名…"
+              placeholder={t('search')}
             />
           </div>
           {hasOps && (
             <div className="op-menu">
               <button className="op-btn" onClick={() => setOpOpen((o) => !o)}>
-                操作 <span className="op-caret">▾</span>
+                {t('actions')} <span className="op-caret">▾</span>
               </button>
               {opOpen && (
                 <div className="op-dropdown">
                   {tab === 'synced' ? (
                     <button onClick={() => { setOpOpen(false); cleanupMissing() }}>
-                      移除已删除记录 ({missingCount})
-                      <span className="op-desc">文件从备份目录被直接删除，仅剩同步记录。移除同步记录后将清除前端已删除图片占位</span>
+                      {t('removeMissing', { count: missingCount })}
+                      <span className="op-desc">{t('removeMissingHint')}</span>
                     </button>
                   ) : (
                     <button onClick={() => { setOpOpen(false); clearIgnored() }}>
-                      清除忽略记录 ({ignoredCount})
-                      <span className="op-desc">手动删除备份留下的标记，相机上的原文件将重新备份</span>
+                      {t('clearIgnored', { count: ignoredCount })}
+                      <span className="op-desc">{t('clearIgnoredHint')}</span>
                     </button>
                   )}
                 </div>
@@ -923,15 +942,19 @@ function FileList() {
             </div>
           )}
           <div className="view-toggle">
-            <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title="图标模式"><IconGrid /></button>
-            <button className={view === 'list' ? 'active' : 'ghost'} onClick={() => setView('list')} title="列表模式"><IconList /></button>
+            <button className={view === 'grid' ? 'active' : 'ghost'} onClick={() => setView('grid')} title={t('gridView')}><IconGrid /></button>
+            <button className={view === 'list' ? 'active' : 'ghost'} onClick={() => setView('list')} title={t('listView')}><IconList /></button>
           </div>
         </div>
       </div>
       {/* 只渲染当前 tab 的列表：display:none 不会阻止图片加载，双列表同时渲染会重复请求缩略图 */}
-      {error && <div className="error" style={{ margin: '0 0 10px' }}>{error}</div>}
+      {error && (
+        <div className="error" style={{ margin: '0 0 10px' }}>
+          {t(error.key, { reason: error.reason ? t(error.reason) : error.detail })}
+        </div>
+      )}
       {!loaded ? (
-        <div className="muted" style={{ padding: '18px 0', textAlign: 'center' }}>加载中…</div>
+        <div className="muted" style={{ padding: '18px 0', textAlign: 'center' }}>{t('loading')}</div>
       ) : view === 'grid' ? (
         <div className="photo-grid">
           {shown.map((x, i) => {
@@ -945,21 +968,21 @@ function FileList() {
                 className={`photo-card${ignored ? ' ignored' : ''}${missing ? ' missing' : ''}`}
                 key={x.path}
                 onClick={() => openPreview(i)}
-                title={missing ? `${x.path}\n文件已从备份目录删除` : ignored ? `${x.path}\n已忽略，不会自动备份` : x.path}
+                title={missing ? `${x.path}\n${t('missingFile')}` : ignored ? `${x.path}\n${t('ignoredFile')}` : x.path}
               >
                 {!isPending && (
                   <button
                     className="photo-del"
-                    title={missing ? '移除记录' : '删除备份'}
+                    title={missing ? t('removeRecord') : t('deleteBackup')}
                     onClick={(e) => deleteFile(e, x.path, missing)}
                   >
                     <IconTrash />
                   </button>
                 )}
-                {ignored && <span className="ignored-tag">已忽略</span>}
-                {missing && <span className="missing-tag">已删除</span>}
+                {ignored && <span className="ignored-tag">{t('ignored')}</span>}
+                {missing && <span className="missing-tag">{t('deleted')}</span>}
                 {missing ? (
-                  <div className="thumb thumb-empty thumb-image" title="文件已从备份目录删除" />
+                  <div className="thumb thumb-empty thumb-image" title={t('missingFile')} />
                 ) : (
                   <Thumb
                     src={isPending
@@ -971,7 +994,7 @@ function FileList() {
                 <div className="photo-foot">
                   <span className="photo-name">{name}</span>
                   {ignored ? (
-                    <button className="restore-btn" onClick={(e) => restoreFile(e, x.path)}>恢复备份</button>
+                    <button className="restore-btn" onClick={(e) => restoreFile(e, x.path)}>{t('restoreBackup')}</button>
                   ) : missing ? (
                     <span className="photo-size"></span>
                   ) : (
@@ -982,74 +1005,74 @@ function FileList() {
             )
           })}
           {shown.length === 0 && (
-            <div className="grid-empty muted">{q ? '没有匹配的文件' : tab === 'synced' ? '暂无记录' : '没有待备份文件'}</div>
+            <div className="grid-empty muted">{q ? t('noMatches') : tab === 'synced' ? t('noRecords') : t('noPending')}</div>
           )}
         </div>
       ) : tab === 'synced' ? (
         <div className="card">
         <table>
           <thead>
-            <tr><th>封面</th><th>文件</th><th>大小</th><th>备份位置</th><th>时间</th><th></th></tr>
+            <tr><th>{t('thumbnail')}</th><th>{t('file')}</th><th>{t('size')}</th><th>{t('backupLocation')}</th><th>{t('time')}</th><th></th></tr>
           </thead>
           <tbody>
             {shown.map((f, i) => {
               // 已同步但文件被从备份目录删除：封面显示占位，行内标记「已删除」
               const missing = f.exists === false
               return (
-                <tr key={f.path} onClick={() => openPreview(i)} title={missing ? '文件已从备份目录删除，点击预览' : '点击预览'}>
+                <tr key={f.path} onClick={() => openPreview(i)} title={missing ? t('previewMissing') : t('preview')}>
                   <td>
                     {missing ? (
-                      <div className="thumb thumb-empty thumb-image" title="文件已从备份目录删除" />
+                      <div className="thumb thumb-empty thumb-image" title={t('missingFile')} />
                     ) : (
                       <Thumb src={`/api/preview?path=${encodeURIComponent(f.dest)}&size=160`} name={f.path.split('/').pop()} />
                     )}
                   </td>
                   <td>
                     {f.path.split('/').pop()}
-                    {missing && <span className="tag" style={{ marginLeft: 8 }}>已删除</span>}
+                    {missing && <span className="tag" style={{ marginLeft: 8 }}>{t('deleted')}</span>}
                   </td>
                   <td>{fmtSize(f.size)}</td>
                   <td>{f.dest}</td>
                   <td>{fmtTime(f.synced_at)}</td>
                   <td>
-                    <button className="row-del" title={missing ? '移除记录' : '删除备份'} onClick={(e) => deleteFile(e, f.path, missing)}>
+                    <button className="row-del" title={missing ? t('removeRecord') : t('deleteBackup')} onClick={(e) => deleteFile(e, f.path, missing)}>
                       <IconTrash />
                     </button>
                   </td>
                 </tr>
               )
             })}
-            {shown.length === 0 && <tr><td colSpan="6" className="muted">暂无记录</td></tr>}
+            {shown.length === 0 && <tr><td colSpan="6" className="muted">{t('noRecords')}</td></tr>}
           </tbody>
         </table>
         </div>
       ) : (
         <div className="card">
         <table>
-          <thead><tr><th>封面</th><th>相机上的文件</th><th></th></tr></thead>
+          <thead><tr><th>{t('thumbnail')}</th><th>{t('filesOnCamera')}</th><th></th></tr></thead>
           <tbody>
             {shown.map((p, i) => (
-              <tr key={p.path} onClick={() => openPreview(i)} title={p.ignored ? '已忽略，不会自动备份' : '点击预览'}>
+              <tr key={p.path} onClick={() => openPreview(i)} title={p.ignored ? t('ignoredFile') : t('preview')}>
                 <td><Thumb src={`/api/thumb?path=${encodeURIComponent(p.path)}`} name={p.path.split('/').pop()} /></td>
                 <td>
                   {p.path}
-                  {p.ignored && <span className="tag" style={{ marginLeft: 8 }}>已忽略</span>}
+                  {p.ignored && <span className="tag" style={{ marginLeft: 8 }}>{t('ignored')}</span>}
                 </td>
                 <td>
                   {p.ignored && (
-                    <button className="restore-btn" onClick={(e) => restoreFile(e, p.path)}>恢复备份</button>
+                    <button className="restore-btn" onClick={(e) => restoreFile(e, p.path)}>{t('restoreBackup')}</button>
                   )}
                 </td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan="3" className="muted">没有待备份文件</td></tr>}
+            {shown.length === 0 && <tr><td colSpan="3" className="muted">{t('noPending')}</td></tr>}
           </tbody>
         </table>
         </div>
       )}
       {shown.length < currentList.length && (
         <div ref={sentinelRef} className="muted" style={{ padding: '10px 0', textAlign: 'center' }}>
-          加载更多…
+          {t('loadingMore')}
         </div>
       )}
       {preview && (
@@ -1065,6 +1088,7 @@ function FileList() {
 }
 
 export default function App() {
+  const { language, t } = useLanguage()
   const [status, setStatus] = useState(null)
   const [page, setPage] = useState('camera')
   const [retrying, setRetrying] = useState(false)
@@ -1096,7 +1120,10 @@ export default function App() {
     setRetrying(false)
   }
 
-  if (!status) return <div className="app"><h1>Canon → NAS 备份</h1><p className="muted">连接后端中…</p></div>
+  if (!status) return <div className="app"><h1>{t('appHeading')}</h1><p className="muted">{t('connectingBackend')}</p></div>
+
+  const error = (language === 'en' && status.last_error_en) || status.last_error
+  const warning = (language === 'en' && status.camera_warning_en) || status.camera_warning
 
   return (
     <div className="layout">
@@ -1104,8 +1131,8 @@ export default function App() {
       <main className="content">
         <header>
           <div>
-            <h1>{PAGE_TITLES[page]}</h1>
-            <div className="page-subtitle">{PAGE_SUBTITLES[page]}</div>
+            <h1>{t(page)}</h1>
+            <div className="page-subtitle">{t(PAGE_SUBTITLES[page])}</div>
           </div>
           <div className="header-actions">
             <StatusBadge status={status} />
@@ -1114,14 +1141,12 @@ export default function App() {
               onClick={retryConnect}
               disabled={retrying || status.syncing}
             >
-              {retrying ? '重试中…' : '重试连接'}
+              {retrying ? t('reconnecting') : t('reconnect')}
             </button>
           </div>
         </header>
-        {status.last_error && <div className="error">{status.last_error}</div>}
-        {status.camera_warning && !status.last_error && (
-          <div className="warning">{status.camera_warning}</div>
-        )}
+        {error && <div className="error">{error}</div>}
+        {warning && !error && <div className="warning">{warning}</div>}
         {page === 'camera' && (
           <>
             <CameraPanel status={status} />
