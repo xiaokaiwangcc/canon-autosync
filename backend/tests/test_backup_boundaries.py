@@ -321,6 +321,17 @@ class BackupBoundaryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.content, b"backup")
             self.assertIn("private", response.headers["cache-control"])
 
+    async def test_thumbnail_endpoint_cannot_serve_camera_html(self):
+        transport = httpx.MockTransport(lambda request: httpx.Response(
+            200, headers={"Content-Type": "text/html"}, text="<script>alert(1)</script>",
+        ))
+        client_class = httpx.AsyncClient
+        async with self.app_client() as client:
+            with patch("app.main.httpx.AsyncClient", side_effect=lambda **kwargs: client_class(transport=transport, **kwargs)):
+                response = await client.get("/api/thumb", params={"path": PHOTO})
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn("<script>", response.text)
+
     async def test_without_password_both_peer_and_host_must_be_local(self):
         async with self.app_client(host="unrelated.local") as client:
             self.assertEqual((await client.get("/api/status")).status_code, 403)

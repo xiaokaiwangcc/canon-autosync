@@ -251,7 +251,12 @@ def list_pending():
 # 再加浏览器缓存头：切页/刷新后命中本地缓存，不再请求后端
 _thumb_sem = asyncio.Semaphore(2)
 _thumb_cache: dict[tuple[str, int, str], tuple[bytes, str]] = {}
-_CACHE_HEADERS = {"Cache-Control": "private, max-age=600", "Cross-Origin-Resource-Policy": "same-origin"}
+_CACHE_HEADERS = {
+    "Cache-Control": "private, max-age=600",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "X-Content-Type-Options": "nosniff",
+}
+_CAMERA_THUMB_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 @app.get("/api/thumb")
 async def thumbnail(path: str = Query(...)):
@@ -277,12 +282,17 @@ async def thumbnail(path: str = Query(...)):
                     await asyncio.sleep(1)
                     continue
                 resp.raise_for_status()
+                media_type = resp.headers.get("content-type", "image/jpeg").partition(";")[0].lower()
+                if media_type == "application/octet-stream" and resp.content.startswith(b"\xff\xd8"):
+                    media_type = "image/jpeg"
+                if media_type not in _CAMERA_THUMB_TYPES:
+                    raise HTTPException(502, "Unexpected camera thumbnail type")
                 if len(_thumb_cache) > 200:
                     # 只清最旧的一半，保留近期热图
                     for old in list(_thumb_cache)[: len(_thumb_cache) // 2]:
                         del _thumb_cache[old]
-                _thumb_cache[key] = (resp.content, resp.headers.get("content-type", "image/jpeg"))
-                return StreamingResponse(iter([resp.content]), media_type=_thumb_cache[key][1], headers=_CACHE_HEADERS)
+                _thumb_cache[key] = (resp.content, media_type)
+                return StreamingResponse(iter([resp.content]), media_type=media_type, headers=_CACHE_HEADERS)
     except (CameraUnreachable, httpx.HTTPError) as e:
         raise HTTPException(502, f"获取缩略图失败：相机连接异常（{e}）")
 
