@@ -1,5 +1,7 @@
 # canon-autosync
 
+[![README views](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync.svg?style=flat&label=README%20views&color=2563eb)](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync/)
+
 [简体中文](README.md) | English
 
 Automatically back up photos and videos from a Canon camera with CCAPI to a NAS or local folder, preserving the camera's directory structure. Canon AutoSync uses a FastAPI backend and a React frontend. Run it locally, as a macOS or Windows desktop app, in Docker, or as a fnOS app.

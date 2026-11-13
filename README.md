@@ -1,5 +1,7 @@
 # canon-autosync
 
+[![README views](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync.svg?style=flat&label=README%20views&color=2563eb)](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync/)
+
 简体中文 | [English](README.en.md)
 
 自动把佳能相机（CCAPI）里的照片/视频增量备份到 NAS 指定目录，保持相机目录结构。Python(FastAPI) 后端 + React(Vite) 前端，可本地运行，也可打包为 macOS/Windows 桌面应用、Docker 容器或飞牛 fnOS 应用（.fpk）。参考 [laszewsk/canon-r7-ccapi](https://github.com/laszewsk/canon-r7-ccapi)。
