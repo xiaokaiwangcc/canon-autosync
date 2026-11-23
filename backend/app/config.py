@@ -13,7 +13,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE = DATA_DIR / "config.json"
 
 # 构建时由 fpk/build.sh / build-desktop.yml 按 tag 写入实际版本
-APP_VERSION = os.environ.get("APP_VERSION", "1.2.1")
+APP_VERSION = os.environ.get("APP_VERSION", "1.2.2")
 
 
 class Config(BaseModel):
@@ -36,17 +36,15 @@ def read_json(path: Path) -> dict:
 
 
 def load_config() -> Config:
-    env_ip = os.environ.get("CANON_IP")
-    env_nas = os.environ.get("NAS_PATH")
-    if CONFIG_FILE.exists():
-        cfg = Config(**read_json(CONFIG_FILE))
-    else:
-        cfg = Config()
-    if env_ip:
-        cfg.camera_ip = env_ip
-    if env_nas:
-        cfg.nas_path = env_nas
-    return cfg
+    saved = read_json(CONFIG_FILE) if CONFIG_FILE.exists() else {}
+    environment = {
+        field: value
+        for field, name in (("camera_ip", "CANON_IP"), ("nas_path", "NAS_PATH"))
+        if (value := os.environ.get(name))
+    }
+    if os.environ.get("CANON_CONFIG_ENV_DEFAULTS") == "1":
+        return Config(**(environment | saved))
+    return Config(**(saved | environment))
 
 
 def save_config(cfg: Config) -> None:

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useBackedUpFiles } from './useBackedUpFiles'
 import { api } from './api'
 import { useLanguage } from './language'
 
@@ -772,29 +773,35 @@ function FileList() {
   const [tab, setTab] = useState('synced')
   const [view, setView] = useState('grid')
   const [query, setQuery] = useState('')
-  const [files, setFiles] = useState([])
-  const [pending, setPending] = useState([])
+  const [pending, setPending] = useState(null)
+  const [pendingFailed, setPendingFailed] = useState(false)
   const [preview, setPreview] = useState(null)
   const [error, setError] = useState(null)
   const [opOpen, setOpOpen] = useState(false) // 操作下拉展开状态
-  const [loaded, setLoaded] = useState(false)
-  // 缩略图分批渲染：首屏 50 张，滚到底部哨兵后再加载下一批，避免一次性请求 200 张
+  // 缩略图分批渲染，已备份列表耗尽当前页后再请求下一页。
   const [visible, setVisible] = useState(50)
   const sentinelRef = useRef(null)
 
-  const rawList = tab === 'synced' ? files : pending
   const q = query.trim().toLowerCase()
-  // 已从备份目录删除的记录数（NAS 直接删除）与手动删除留下的忽略记录数（应用内删除）
-  const missingCount = files.filter((f) => f.exists === false).length
-  const ignoredCount = pending.filter((p) => p.ignored).length
-  const hasOps = tab === 'synced' ? missingCount > 0 : ignoredCount > 0
-  const currentList = q
-    ? rawList.filter((x) => x.path.split('/').pop().toLowerCase().includes(q))
-    : rawList
+  const isSynced = tab === 'synced'
+  const backups = useBackedUpFiles(q)
+  const files = backups.page?.items ?? []
+  const pendingFiles = pending ?? []
+  const ignoredCount = pendingFiles.filter((p) => p.ignored).length
+  const hasOps = isSynced ? files.some((f) => f.exists === false) : ignoredCount > 0
+  const currentList = isSynced
+    ? files
+    : q ? pendingFiles.filter((x) => x.path.split('/').pop().toLowerCase().includes(q)) : pendingFiles
   const shown = currentList.slice(0, visible)
+  const loaded = isSynced ? backups.loaded : pending !== null || pendingFailed
+  const listFailed = isSynced ? backups.firstPageFailed : pendingFailed
+  const displayError = error ?? (listFailed ? { key: 'listLoadFailed' } : null)
+  const moreLoaded = shown.length < currentList.length
+  const moreAvailable = isSynced && Boolean(backups.page?.next_cursor)
+  const { loadMore, loadingMore, nextPageFailed } = backups
 
   const openPreview = (idx) => {
-    // 用全量列表而非已渲染批次：模态框内可翻页到未加载的项（图片 src 仅在展示时才请求）
+    // Use all fetched files so the preview can also navigate beyond rendered thumbnails.
     const isP = tab === 'pending'
     const list = currentList.map((x) => {
       const src = isP
@@ -812,19 +819,30 @@ function FileList() {
   }
 
   useEffect(() => {
-    const load = () => {
-      Promise.all([api.files(0, 200), api.pending()])
-        .then(([f, p]) => {
-          setFiles(f.items)
-          setPending(p)
-          setError(null)
-        })
-        .catch(() => setError({ key: 'listLoadFailed' }))
-        .finally(() => setLoaded(true))
+    const controller = new AbortController()
+    const { signal } = controller
+    let busy = false
+    const load = async () => {
+      if (busy) return
+      busy = true
+      try {
+        const files = await api.pending({ signal })
+        if (!signal.aborted) {
+          setPending(files)
+          setPendingFailed(false)
+        }
+      } catch {
+        if (!signal.aborted) setPendingFailed(true)
+      } finally {
+        busy = false
+      }
     }
-    load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
+    void load()
+    const timer = setInterval(load, 5000)
+    return () => {
+      clearInterval(timer)
+      controller.abort()
+    }
   }, [])
 
   const deleteFile = async (e, file, missing = false) => {
@@ -837,7 +855,8 @@ function FileList() {
     if (!window.confirm(confirmMsg)) return
     try {
       await api.deleteFile(file.id)
-      setFiles((fs) => fs.filter((f) => f.id !== file.id))
+      setError(null)
+      backups.reload()
     } catch {
       setError({ key: 'deleteFailed' })
     }
@@ -845,10 +864,11 @@ function FileList() {
 
   // 一键移除全部已删除记录：仅清理 dest 已不存在的，存在的备份不受影响
   const cleanupMissing = async () => {
-    if (!window.confirm(t('confirmCleanupMissing', { count: missingCount }))) return
+    if (!window.confirm(t('confirmCleanupMissing'))) return
     try {
       await api.cleanupMissing()
-      setFiles((fs) => fs.filter((f) => f.exists !== false))
+      setError(null)
+      backups.reload()
     } catch (err) {
       setError({
         key: 'cleanupFailed',
@@ -863,6 +883,7 @@ function FileList() {
     if (!window.confirm(t('confirmClearIgnored', { count: ignoredCount }))) return
     try {
       await api.clearIgnored()
+      setError(null)
       setPending((ps) => ps.map((p) => ({ ...p, ignored: false })))
     } catch (err) {
       setError({ key: 'clearFailed', detail: err.message })
@@ -883,27 +904,29 @@ function FileList() {
     e.stopPropagation()
     try {
       await api.restoreFile(camPath)
+      setError(null)
       setPending((ps) => ps.map((p) => (p.path === camPath ? { ...p, ignored: false } : p)))
     } catch {
       setError({ key: 'restoreFailed' })
     }
   }
 
-  // 切换 tab/视图时重置分批加载进度
-  useEffect(() => setVisible(50), [tab, view])
+  useEffect(() => setVisible(50), [tab, view, q])
 
-  // 列表底部哨兵进入视口时加载下一批缩略图
+  // Reveal the next batch locally before requesting another server page.
   useEffect(() => {
-    if (!sentinelRef.current) return
+    if (!sentinelRef.current || typeof IntersectionObserver === 'undefined') return
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting) setVisible((v) => v + 50)
+        if (!entries[0].isIntersecting) return
+        if (moreLoaded) setVisible((v) => v + 50)
+        else if (moreAvailable && !loadingMore && !nextPageFailed) void loadMore()
       },
       { rootMargin: '300px' }
     )
     io.observe(sentinelRef.current)
     return () => io.disconnect()
-  }, [tab, view, shown.length])
+  }, [tab, view, shown.length, moreLoaded, moreAvailable, loadingMore, nextPageFailed, loadMore])
 
   return (
     <div>
@@ -911,11 +934,11 @@ function FileList() {
         <div className="seg-tabs">
           <button className={tab === 'synced' ? 'active' : ''} onClick={() => setTab('synced')}>
             <Icon paths={ICON_CHECK_CIRCLE} size={13} />
-            {t('backedUp')} <span className="seg-count">{files.length}</span>
+            {t('backedUp')} <span className="seg-count">{backups.total}</span>
           </button>
           <button className={tab === 'pending' ? 'active' : ''} onClick={() => setTab('pending')}>
             <Icon paths={ICON_HOURGLASS} size={13} />
-            {t('pendingBackup')} <span className="seg-count">{pending.filter((p) => !p.ignored).length}</span>
+            {t('pendingBackup')} <span className="seg-count">{pendingFiles.length - ignoredCount}</span>
           </button>
         </div>
         <div className="files-tools">
@@ -936,7 +959,7 @@ function FileList() {
                 <div className="op-dropdown">
                   {tab === 'synced' ? (
                     <button onClick={() => { setOpOpen(false); cleanupMissing() }}>
-                      {t('removeMissing', { count: missingCount })}
+                      {t('removeMissing')}
                       <span className="op-desc">{t('removeMissingHint')}</span>
                     </button>
                   ) : (
@@ -956,9 +979,9 @@ function FileList() {
         </div>
       </div>
       {/* 只渲染当前 tab 的列表：display:none 不会阻止图片加载，双列表同时渲染会重复请求缩略图 */}
-      {error && (
+      {displayError && (
         <div className="error" style={{ margin: '0 0 10px' }}>
-          {t(error.key, { reason: error.reason ? t(error.reason) : error.detail })}
+          {t(displayError.key, { reason: displayError.reason ? t(displayError.reason) : displayError.detail })}
         </div>
       )}
       {!loaded ? (
@@ -1050,7 +1073,7 @@ function FileList() {
                 </tr>
               )
             })}
-            {shown.length === 0 && <tr><td colSpan="6" className="muted">{t('noRecords')}</td></tr>}
+            {shown.length === 0 && <tr><td colSpan="6" className="muted">{t(q ? 'noMatches' : 'noRecords')}</td></tr>}
           </tbody>
         </table>
         </div>
@@ -1073,14 +1096,16 @@ function FileList() {
                 </td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan="3" className="muted">{t('noPending')}</td></tr>}
+            {shown.length === 0 && <tr><td colSpan="3" className="muted">{t(q ? 'noMatches' : 'noPending')}</td></tr>}
           </tbody>
         </table>
         </div>
       )}
-      {shown.length < currentList.length && (
+      {(moreLoaded || moreAvailable) && (
         <div ref={sentinelRef} className="muted" style={{ padding: '10px 0', textAlign: 'center' }}>
-          {t('loadingMore')}
+          {moreLoaded || loadingMore ? t('loadingMore') : (
+            <button className="ghost" onClick={loadMore}>{t(nextPageFailed ? 'loadMoreRetry' : 'loadMore')}</button>
+          )}
         </div>
       )}
       {preview && (
