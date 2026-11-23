@@ -1,47 +1,60 @@
-# canon-autosync
+# Canon AutoSync · 佳能相机 Wi-Fi 自动备份到 NAS
 
 [![README views](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync.svg?style=flat&label=README%20views&color=2563eb)](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync/)
 
 简体中文 | [English](README.en.md)
 
-自动把佳能相机（CCAPI）里的照片/视频增量备份到 NAS 指定目录，保持相机目录结构。Python(FastAPI) 后端 + React(Vite) 前端，可本地运行，也可打包为 macOS/Windows 桌面应用、Docker 容器或飞牛 fnOS 应用（.fpk）。参考 [laszewsk/canon-r7-ccapi](https://github.com/laszewsk/canon-r7-ccapi)。
+Canon AutoSync 通过佳能 Camera Control API（CCAPI），经 Wi-Fi 将相机里的照片和视频自动增量备份到 NAS 或电脑本地目录，保留相机的目录结构。可在飞牛 NAS（fnOS）、Docker、Windows 和 macOS 上运行。
+
+## 下载与安装
+
+| 平台 | 安装入口 |
+| --- | --- |
+| 飞牛 NAS（fnOS） | [下载 FPK](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync.fpk) · [飞牛 NAS 安装与首次备份教程](docs/fnos-quickstart.md) |
+| Docker | [Docker Compose 部署](#docker-部署) |
+| Windows | [下载 EXE](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync-windows.exe) |
+| macOS | [下载 DMG](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync-macos.dmg) · [下载 ZIP](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync-macos.zip) |
+| 从源码运行 | [本地开发](#本地开发) |
+
+[所有版本与安装包](https://github.com/xiaokaiwangcc/canon-autosync/releases) · [版本变更与 Bug 修复](CHANGELOG.md)
+
+## 首次备份
+
+1. **启用 CCAPI。** 相机需要支持 CCAPI 的机型和固件。若机型要求激活，先用佳能提供的 Windows 激活工具通过 USB 完成一次性设置。然后在相机的 Wi-Fi 设置中选择 **Camera Control API → 连接**，接入局域网。在运行 Canon AutoSync 的设备上打开相机显示的地址，例如 `http://<相机IP>:8080/ccapi`，确认能看到 JSON。 [佳能中国 SDK 获取入口](https://www.canon.com.cn/supports/sdk/icp/)
+2. **设置备份目录。** 在 Canon AutoSync 的「设置」中填写相机显示的 IP 和端口，选择应用有写入权限的备份目录。Docker 部署请选容器内已挂载的目录。
+3. **拍一张测试照片。** 确认「相机」页显示已连接，拍摄一张照片后在「文件 → 已备份」中查找，并在目标目录确认文件已写入。事件接口可用时会自动触发同步，定时扫描默认间隔 60 秒。也可以点击「立即同步」验证连接和写入。
+
+## 机型兼容性
+
+程序会根据相机提供的 CCAPI 资源选择目录、事件和状态接口。可用功能随相机型号和固件而变化，部分只提供普通目录响应的旧接口，其大目录翻页仍待实机验证。 [CCAPI 适配范围与验证方法](docs/ccapi-compatibility.md)
+
+仓库已有 Canon EOS R7（固件 1.8.0）的历史实机记录。Canon AutoSync v1.0.8 的界面显示 77 个文件已备份，最近传输中包含 JPG 和 MP4。 [EOS R7 实机记录](docs/ccapi-compatibility.md#实机兼容记录)
 
 ## 功能特性
 
-- **中英文界面**：在「设置 → 关于 → 界面语言」切换，网页会记住当前浏览器中的选择
-- **秒级同步**：事件驱动监听相机，拍照/录视频后立即自动备份；事件驱动不可用时自动降级为定时扫描兜底（默认 60s，可配置）
-- **多版本 CCAPI**：自动发现相机公布的接口，按能力选择 endpoint；目录接口兼容 `ver100`–`ver140` 候选和普通/chunked 响应
-- **传输保护**：同步前健康检查（相机过热/低电量自动暂停）、传输速率监控（Wi-Fi 弱时提示）、缩略图请求并发限制 + 失败重试 + 多级缓存（内存/磁盘/浏览器），避免相机 CCAPI 被并发打挂（503）
-- **相机状态面板**：电量、机身温度、存储卡容量、序列号/MAC、同步进度实时显示
-- **文件浏览**：已备份 / 待备份双标签（每 5s 自动刷新），列表/图标两种视图，支持文件名搜索、缩略图封面（RAW 提取内嵌 JPEG 预览、MP4/MOV 提取视频首帧，其余不可预览格式显示类型占位图标）、大图预览（键盘 ← → 切换、Esc 关闭）、视频可在线播放
-- **备份管理**：可手动删除备份（相机原文件进入忽略名单，不再自动传回），可随时恢复；可选"同步后删除卡上文件"
+- 在「设置 → 关于 → 界面语言」切换中英文界面，网页会记住当前浏览器中的选择。
+- 自动监听新拍摄的照片和视频。事件接口不可用时按设定间隔扫描。
+- 按相机公布的 CCAPI 资源选择接口，目录读取支持 `ver100`–`ver140` 候选和普通、chunked 响应。
+- 相机过热或电量耗尽时暂停同步。传输减速时提示用户，并限制和缓存缩略图请求以减少相机负载。
+- 相机面板显示电量、温度、存储卡容量、序列号、MAC 地址和同步进度。
+- 文件列表会自动刷新。已备份文件支持分页、全库文件名搜索和预览。文件页可切换列表和图标视图，显示带内嵌 JPEG 的 RAW 文件缩略图以及 MP4、MOV 的首帧。
+- 删除备份后，对应的相机原件会进入忽略名单。解除忽略后，相机上仍存在的原件可再次备份。也可在设置中启用同步后删除卡上文件。
 
-![界面预览](docs/images/image.png)
+![Canon AutoSync 界面示例，使用模拟数据](docs/images/image.png)
 
-## 文档
-
-- [版本变更与 Bug 修复记录](CHANGELOG.md)
-- [CCAPI 兼容性与实机验证](docs/ccapi-compatibility.md)
-- [GitHub Releases](https://github.com/xiaokaiwangcc/canon-autosync/releases)：下载各平台安装包与发布资产
+*界面示例使用模拟数据。*
 
 ## 原理
 
-相机开启 WiFi + CCAPI 后，后端主循环：
+相机通过 Wi-Fi 开启 CCAPI 后，后端循环处理以下步骤。
 
-1. 健康检查（温度/电量）→ 递归列出 SD 卡全部文件 → 与本地同步记录对比，筛出待备份文件
-2. 增量下载到 NAS 目录（保持相机目录结构），每传完一个文件即记录进度
-3. 无待备份文件时进入事件监听：相机有新文件立即重新同步；相机不支持事件或超时，则按兜底间隔扫描
+1. 检查温度和电量，读取存储卡目录，与本地同步记录对比，筛出待备份文件。
+2. 增量下载到目标目录，保留相机目录结构并记录已完成的文件。
+3. 队列处理完后等待新拍摄事件。相机不支持事件接口或等待超时时，按配置的间隔扫描。
 
-## 相机准备
+## 本地开发
 
-1. 固件升级到支持 CCAPI 的版本（R7/R6/R5/R3/R10/R50/M50 II 等）
-2. **激活 CCAPI**（只需一次）：解压 `ccapitool/` 中的压缩包，用 Activation Tool 通过 USB 连接相机激活（需 Windows）
-3. 相机连接 Wi-Fi 后，在 Wi-Fi 设置 → Camera Control API → 连接，选择对应 Wi-Fi，屏幕出现 `http://<相机IP>:8080/ccapi`
-4. 浏览器打开该地址，确认返回 JSON
-
-注意：**"连接至智能手机"和"遥控(EOS Utility)"模式不会启动 CCAPI HTTP 服务**，必须用激活后出现的 CCAPI 连接选项。R7 文件浏览接口为 `/ccapi/ver130/contents`，客户端已按此实现。
-
-## 快速开始（本地开发）
+后端使用 Python 和 FastAPI，前端使用 React 和 Vite。在两个终端中从仓库根目录分别启动后端和前端。
 
 ```bash
 # 后端
@@ -49,10 +62,12 @@ cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --port 8000
+```
 
+```bash
 # 前端
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -70,7 +85,7 @@ export NAS_PATH=/Volumes/photos/canon-backup   # 备份目录
 基于 pywebview + PyInstaller：本地启动 FastAPI（动态空闲端口，仅监听 127.0.0.1），原生窗口加载前端，代码与后端完全复用。
 
 ```bash
-cd frontend && npm run build   # 构建前端（首次）
+(cd frontend && npm ci && npm run build)
 pip install -r backend/requirements.txt -r desktop/requirements.txt
 python desktop/entry.py        # 弹出桌面窗口
 ```
@@ -146,9 +161,15 @@ DATA_DIR=./data                      # 配置与同步记录存储位置
 | POST | /api/sync | 手动触发同步 |
 | POST | /api/sync/stop | 停止当前同步 |
 | POST | /api/reconnect | 重试连接相机 |
-| GET | /api/files | 已备份文件列表（offset/limit 分页） |
+| GET | /api/files | 已备份文件列表，支持 `q` 文件名搜索、`cursor` 游标和 `offset`、`limit` 分页参数 |
 | DELETE | /api/files?path= | 删除已备份记录及其 NAS 上的文件 |
 | POST | /api/files/restore?path= | 移出忽略名单，恢复自动备份 |
 | GET | /api/pending | 相机上待备份文件 |
 | GET | /api/thumb?path= | 相机文件缩略图（并发限制 + 缓存） |
 | GET | /api/preview?id=&size= | 预览已登记的备份，使用 `/api/files` 返回的 `id` |
+
+## 测试与许可
+
+- 自动化测试覆盖备份与配置行为，持续集成在 Linux、macOS 和 Windows 上运行后端测试。 [.github/workflows/test.yml](.github/workflows/test.yml)
+- 项目源代码采用 MIT 许可证。 [LICENSE](LICENSE) · [第三方声明](THIRD_PARTY_NOTICES.md)
+- CCAPI 客户端实现参考了 [laszewsk/canon-r7-ccapi](https://github.com/laszewsk/canon-r7-ccapi)。

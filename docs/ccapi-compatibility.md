@@ -26,6 +26,20 @@ canon-autosync 不再把整台相机固定为单一 CCAPI 版本。程序连接 
 
 旧版本若只提供带分页字段的普通 contents 响应，目前仍需对应机型的脱敏响应样本才能确认翻页规则；在完成实机验证前，不应把普通列表降级解释为“大目录已完整验证”。
 
+## 实机兼容记录
+
+### Canon EOS R7（固件 1.8.0）
+
+| 机型 | 固件 | Canon AutoSync 版本 | 记录日期 |
+| --- | --- | --- | --- |
+| Canon EOS R7 | 1.8.0 | v1.0.8 | 2026-08-05（界面显示的上次同步日期） |
+
+- 界面显示相机已通过 CCAPI 连接，相机文件 77 个、已备份 77 个、待备份 0 个。最近传输记录包含 JPG 照片和 MP4 视频。
+- 界面显示电量、温度和存储卡容量。电量接口的实测响应为 `level=high`。 [电量接口实测记录](https://github.com/xiaokaiwangcc/canon-autosync/blob/1f87637a2ea5bb0d2bd71dfba32f75f6faedda2d/backend/app/sync.py#L101-L107)
+- 界面显示「监听拍摄中」。新拍摄能否自动触发备份及触发延迟待补测。
+
+这条记录依据提交 `1f87637` 保存的历史界面截图和接口实测注释。部署平台、目录响应模式、RAW 文件备份、断线重连，以及 v1.2.2 的实机表现待补测。
+
 ## 实机验证
 
 相机连通后查看：
@@ -34,13 +48,10 @@ canon-autosync 不再把整台相机固定为单一 CCAPI 版本。程序连接 
 GET /api/status
 ```
 
-重点保存以下字段，响应中不要包含认证凭据：
+提交实测前，请单独记录机型、固件、应用版本、部署平台和测试日期。从响应中摘录下方示例里的 `ccapi` 字段，并遮盖 IP、序列号、MAC 地址、私有目录和凭据。 [提交机型兼容性报告](https://github.com/xiaokaiwangcc/canon-autosync/issues/new?template=camera-compatibility.yml)
 
 ```json
 {
-  "camera": {
-    "device": {}
-  },
   "ccapi": {
     "versions": ["100", "110", "130"],
     "endpoints": {

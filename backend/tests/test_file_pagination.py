@@ -20,6 +20,8 @@ class FilePaginationTests(unittest.IsolatedAsyncioTestCase):
         self.target = BackupTarget.from_config(config)
         self.target.root.mkdir()
         self.state = State(config)
+        # These API tests seed in-memory records and do not exercise state writes.
+        self.enterContext(patch.object(self.state, "_schedule_flush"))
         self.enterContext(patch.multiple(main, config=config, state=self.state))
         self.enterContext(patch.object(main.app.state, "api_password", None))
         self.at = datetime(2026, 11, 1, 12)

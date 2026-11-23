@@ -1,29 +1,52 @@
-# canon-autosync
+# Canon AutoSync · Automatic Canon camera backups to NAS over Wi-Fi
 
 [![README views](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync.svg?style=flat&label=README%20views&color=2563eb)](https://hits.sh/github.com/xiaokaiwangcc/canon-autosync/)
 
 [简体中文](README.md) | English
 
-Automatically back up photos and videos from a Canon camera with CCAPI to a NAS or local folder, preserving the camera's directory structure. Canon AutoSync uses a FastAPI backend and a React frontend. Run it locally, as a macOS or Windows desktop app, in Docker, or as a fnOS app.
+Canon AutoSync uses Canon Camera Control API (CCAPI) to back up new photos and videos over Wi-Fi to a NAS or a local folder, preserving the camera's directory structure. Run it as a fnOS app, in Docker, or as a Windows or macOS desktop app.
+
+## Download and install
+
+| Platform | Get started |
+| --- | --- |
+| fnOS NAS | [Download FPK](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync.fpk) · [fnOS setup and first backup (Chinese)](docs/fnos-quickstart.md) |
+| Docker | [Deploy with Docker Compose](#docker) |
+| Windows | [Download EXE](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync-windows.exe) |
+| macOS | [Download DMG](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync-macos.dmg) · [Download ZIP](https://github.com/xiaokaiwangcc/canon-autosync/releases/latest/download/canon-autosync-macos.zip) |
+| From source | [Run locally](#run-locally) |
+
+[All releases and downloads](https://github.com/xiaokaiwangcc/canon-autosync/releases) · [Changelog (Chinese)](CHANGELOG.md)
+
+## First backup
+
+1. **Enable CCAPI on the camera.** Check that your camera and firmware support CCAPI. If your model requires activation, use Canon's Windows activation tool over USB for the one-time setup. On the camera, choose **Wi-Fi settings → Camera Control API → Connect** and join the local network. From the device running Canon AutoSync, open the address shown on the camera, such as `http://<camera-ip>:8080/ccapi`, and check that it returns JSON. [Canon Camera API Package](https://asia.canon/en/campaign/developerresources/camera/cap)
+2. **Set the backup folder.** In **Settings**, enter the IP address and port shown on the camera and choose a folder the app can write to. For Docker, use a path mounted inside the container.
+3. **Take a test photo.** Check that the camera is connected, take a photo, and look for it under **Files → Backed up** and in your backup folder. The app listens for new captures when camera events are available and falls back to scheduled scans with a default interval of 60 seconds. Select **Sync now** to check the connection and file transfer manually.
+
+## Camera compatibility
+
+Canon AutoSync detects the CCAPI resources exposed by the camera and selects its listing, event and status endpoints accordingly. Features vary by camera and firmware. Pagination for large directories on older firmware that only returns plain listings still needs camera testing. [CCAPI compatibility and validation (Chinese)](docs/ccapi-compatibility.md)
+
+The project has a historical test record for the Canon EOS R7 with firmware 1.8.0. The Canon AutoSync v1.0.8 dashboard showed 77 backed-up files, with both JPG photos and MP4 videos in the transfer history. [EOS R7 test record (Chinese)](docs/ccapi-compatibility.md#实机兼容记录)
+
+## Features
 
 - **Automatic sync** listens for new captures and falls back to scheduled scans when camera events are unavailable. The default scan interval is 60 seconds.
 - **Transfer safeguards** pause sync if the camera overheats or its battery is empty, flag slow Wi-Fi transfers, and limit and cache thumbnail requests to reduce load on the camera.
 - **Camera dashboard** shows battery level, temperature, card capacity, serial number, MAC address, and sync progress.
-- **File browser** shows backed-up and pending files in grid or list view with search, RAW and video thumbnails, and full-size previews. Use the arrow keys to browse previews and Esc to close them.
+- **File browser** shows backed-up and pending files in grid or list view, with pagination and filename search across the backup library. It previews full-size images and videos, plus thumbnails for RAW files with embedded JPEG previews and for MP4 and MOV videos. Use the arrow keys to browse previews and Esc to close them.
 - **Backup management** lets you delete NAS backups and exclude the corresponding camera originals from automatic backup. Use **Restore backup** to include a file again. You can also enable automatic deletion of originals after backup.
 
 Use **Settings → About → Interface language** to switch between English and Simplified Chinese. The web app remembers your choice in the current browser. On first use it selects Simplified Chinese for a Chinese browser locale and English otherwise.
 
-## Camera setup
+![Example of the Canon AutoSync interface with simulated data](docs/images/image.png)
 
-1. Update the camera to firmware that supports CCAPI.
-2. If CCAPI has yet to be activated, extract the Windows Activation Tool from [`ccapitool/`](ccapitool/) and activate CCAPI over USB. This is a one-time step.
-3. On the camera, choose **Wi-Fi settings → Camera Control API → Connect** and select your Wi-Fi network. The camera displays an address such as `http://<camera-ip>:8080/ccapi`.
-4. Open the displayed address in a browser on the same network and check that it returns JSON.
-
-Use the **Camera Control API** connection option to start the CCAPI HTTP service. Canon AutoSync uses `/ccapi/ver130/contents` to browse camera files.
+*The interface example uses simulated data.*
 
 ## Run locally
+
+The backend uses Python and FastAPI, and the frontend uses React and Vite.
 
 From the repository root, start the backend in one terminal.
 
@@ -108,9 +131,15 @@ Run `./fpk/build.sh` with `fnpack` available to build the frontend and package t
 | POST | `/api/sync` | Start a sync |
 | POST | `/api/sync/stop` | Request a stop for the current sync |
 | POST | `/api/reconnect` | Retry the camera connection |
-| GET | `/api/files` | List backups with `offset` and `limit` |
+| GET | `/api/files` | Search backup filenames with `q` and paginate with `cursor` or `offset` plus `limit` |
 | DELETE | `/api/files?path=` | Delete a backup record and its file on the NAS |
 | POST | `/api/files/restore?path=` | Include an ignored camera original in automatic backups again |
 | GET | `/api/pending` | List camera files that are pending backup |
 | GET | `/api/thumb?path=` | Fetch a camera thumbnail |
 | GET | `/api/preview?id=&size=` | Preview a recorded backup using the `id` returned by `/api/files` |
+
+## Tests and license
+
+- Automated tests cover backup and configuration behavior. CI runs backend tests on Linux, macOS, and Windows. [.github/workflows/test.yml](.github/workflows/test.yml)
+- The project source code is licensed under MIT. [LICENSE](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+- The CCAPI client implementation draws on [laszewsk/canon-r7-ccapi](https://github.com/laszewsk/canon-r7-ccapi).

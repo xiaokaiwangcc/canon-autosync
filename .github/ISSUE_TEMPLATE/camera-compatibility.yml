@@ -1,0 +1,86 @@
+name: 机型兼容性实测
+description: 提交佳能相机的 CCAPI 连接、照片和视频备份实测结果
+title: "[机型实测] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        成功和失败的实机结果都可以提交。请按实际测试填写，未试过的能力可以写「未测试」。
+
+        [飞牛 fnOS 备份教程](https://github.com/xiaokaiwangcc/canon-autosync/blob/main/docs/fnos-quickstart.md) · [已有机型记录](https://github.com/xiaokaiwangcc/canon-autosync/blob/main/docs/ccapi-compatibility.md)
+  - type: input
+    id: camera-model
+    attributes:
+      label: 相机机型
+      placeholder: EOS R7
+    validations:
+      required: true
+  - type: input
+    id: camera-firmware
+    attributes:
+      label: 相机固件版本
+      placeholder: 1.8.0
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: 部署方式及系统版本
+      description: 填写 fnOS、Docker、macOS 或 Windows 等部署方式及操作系统版本。
+      placeholder: fnOS FPK，系统版本 …
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Canon AutoSync 版本
+      description: 应用「设置 → 关于」中的版本号，从源码运行时也可填写提交号。
+      placeholder: v1.2.2
+    validations:
+      required: true
+  - type: input
+    id: test-date
+    attributes:
+      label: 测试日期
+      placeholder: YYYY-MM-DD
+    validations:
+      required: true
+  - type: textarea
+    id: tested-capabilities
+    attributes:
+      label: 已测试的能力及结果
+      description: 逐项记录成功、失败或未测试。按实际情况填写相机连接、JPG、MP4、RAW、定时扫描、事件触发和断线重连。
+      placeholder: |
+        相机连接成功。
+        JPG 和 MP4 自动写入 NAS，已打开样片并确认视频可播放。
+        新拍摄通过定时扫描备份，事件触发未测试。
+    validations:
+      required: true
+  - type: textarea
+    id: ccapi
+    attributes:
+      label: CCAPI 版本与目录模式（选填）
+      description: 登录后从 /api/status 的 ccapi 摘录 versions、endpoints（仅相对路径）、contents_list_mode 和 unsupported。
+      placeholder: |
+        versions = ["100", "130"]
+        contents = /ccapi/ver130/contents
+        contents_list_mode = chunked
+        unsupported = []
+  - type: textarea
+    id: steps-and-evidence
+    attributes:
+      label: 复现步骤与验证证据
+      description: 描述连接方式、自动或手动同步、操作步骤和结果。可附脱敏截图或相关日志片段，或用文字描述在 NAS 上检查到的文件和结果。
+      placeholder: |
+        相机和 NAS 接同一路由器，通过 Camera Control API 连接。
+        拍摄一张 JPG 和一段 MP4，等待扫描，随后在 NAS 文件管理核实并打开文件。
+        示例路径 sd/DCIM/100CANON/IMG_0001.JPG。
+    validations:
+      required: true
+  - type: checkboxes
+    id: sanitized
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已遮挡密码、IP、SSID、序列号、MAC、用户名和私人路径，仅提供脱敏片段及与测试有关的内容。
+          required: true
