@@ -103,14 +103,16 @@ macOS 首次打开提示"无法验证开发者"（应用未签名公证），任
 docker compose up -d --build   # 默认相机 IP 192.168.5.53、备份目录 /vol1/photos/canon-backup
 ```
 
-打开 `http://<NAS IP>:8315`，使用用户名 `canon` 登录。首次启动会把随机密码保存到 `DATA_DIR/api-password`（默认 `./data/api-password`），可在宿主机读取。可用 `.env` 覆盖默认配置：
+打开 `http://<NAS IP>:8315`，使用用户名 `canon` 登录。首次启动会把随机密码保存到 `DATA_DIR/api-password`（默认 `./data/api-password`），可在宿主机读取。可用 `.env` 设置初始值和挂载目录：
 
 ```bash
-CANON_IP=192.168.1.50                # 相机 IP
-BACKUP_DIR=/vol1/photos/canon-backup # 照片备份目录（宿主路径）
+CANON_IP=192.168.1.50                # 初始相机 IP
+BACKUP_DIR=/vol1/photos/canon-backup # 照片挂载目录（宿主路径），也是初始备份目录
 DATA_DIR=./data                      # 配置与同步记录存储位置
 # CANON_API_PASSWORD=...            # 可选，自定义登录密码
 ```
+
+重启时优先读取 `DATA_DIR/config.json` 中通过网页保存的相机 IP 和备份目录。网页里的备份目录应指向容器已挂载的路径，例如默认 Compose 中的 `BACKUP_DIR` 或其子目录。更换宿主机挂载目录时，请同步更新 Compose 配置和网页里的备份目录。
 
 部署要点：
 

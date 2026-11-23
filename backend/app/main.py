@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
 import asyncio
 import hashlib
 import io
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -109,14 +111,41 @@ async def reconnect_camera():
 
 
 @app.get("/api/files")
-def list_synced(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200)):
+def list_synced(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+    q: str = "",
+    cursor: str | None = None,
+):
+    boundary = None
+    if cursor is not None:
+        timestamp, _, file_id = cursor.partition("|")
+        try:
+            datetime.fromisoformat(timestamp)
+        except ValueError as error:
+            raise HTTPException(400, "Invalid backup cursor") from error
+        if not re.fullmatch(r"[0-9a-f]{64}", file_id) or offset:
+            raise HTTPException(400, "Invalid backup cursor or offset")
+        boundary = (timestamp, file_id)
+
     # 快照在锁内复制：同步主循环会并发写 state.synced，直接遍历可能抛
     # RuntimeError（dictionary changed size during iteration）导致接口 500
     target = BackupTarget.from_config(config)
     items = state.snapshot_synced(target.root)
-    items.sort(key=lambda kv: kv[1]["synced_at"], reverse=True)
+    unfiltered_total = len(items)
+    query = q.strip().lower()
+    if query:
+        items = [(key, meta) for key, meta in items if query in meta["href"].rsplit("/", 1)[-1].lower()]
     total = len(items)
+    if boundary is not None:
+        # Use the sort key rather than looking up the boundary record, which may have been removed.
+        items = [(key, meta) for key, meta in items if (meta["synced_at"], key) < boundary]
+    items.sort(key=lambda kv: (kv[1]["synced_at"], kv[0]), reverse=True)
     page = items[offset : offset + limit]
+    next_cursor = None
+    if offset + limit < len(items):
+        last_id, last_meta = page[-1]
+        next_cursor = f"{last_meta['synced_at']}|{last_id}"
     # 校验 dest 是否真实存在：用户在备份目录手动删文件后记录仍在，
     # 前端据此标记「已删除」而非误报缩略图加载失败（每页最多 200 条 stat，开销可忽略）
     # NAS 掉线/未挂载时 is_file 全为 False，会把正常记录误标「已删除」；
@@ -133,7 +162,7 @@ def list_synced(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=2
             "synced_at": meta["synced_at"],
             "exists": (bool(dest) and Path(dest).is_file()) if nas_ok else None,
         })
-    return {"total": total, "items": result}
+    return {"total": total, "unfiltered_total": unfiltered_total, "items": result, "next_cursor": next_cursor}
 
 
 @app.delete("/api/files")

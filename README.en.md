@@ -88,7 +88,7 @@ DATA_DIR=./data
 # CANON_API_PASSWORD=...   # Optional custom login password
 ```
 
-`BACKUP_DIR` is the host folder for backed-up media. `DATA_DIR` holds configuration and sync history. Both are mounted into the container.
+`CANON_IP` and `BACKUP_DIR` provide the initial camera address and backup folder. On restart, the app uses settings saved in `DATA_DIR/config.json`. `DATA_DIR` holds configuration and sync history, and `BACKUP_DIR` binds the host media folder to the same path in the container. In Settings, choose a path on a mounted volume, such as `BACKUP_DIR` or one of its subdirectories. If you change the host mount, update the Compose configuration and the backup folder in the app.
 
 ## fnOS package
 

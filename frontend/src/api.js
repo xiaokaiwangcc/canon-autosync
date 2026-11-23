@@ -26,10 +26,15 @@ export const api = {
   sync: () => req('/api/sync', { method: 'POST' }),
   stopSync: () => req('/api/sync/stop', { method: 'POST' }),
   reconnect: () => req('/api/reconnect', { method: 'POST' }),
-  files: (offset = 0, limit = 100) => req(`/api/files?offset=${offset}&limit=${limit}`),
+  files: (offset = 0, limit = 100, { q, cursor, signal } = {}) => {
+    const params = new URLSearchParams({ offset, limit })
+    if (q) params.set('q', q)
+    if (cursor) params.set('cursor', cursor)
+    return req(`/api/files?${params}`, { signal })
+  },
   deleteFile: (path) => req(`/api/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   cleanupMissing: () => req('/api/files/cleanup-missing', { method: 'POST' }),
   clearIgnored: () => req('/api/files/clear-ignored', { method: 'POST' }),
   restoreFile: (path) => req(`/api/files/restore?path=${encodeURIComponent(path)}`, { method: 'POST' }),
-  pending: () => req('/api/pending'),
+  pending: (options) => req('/api/pending', options),
 }
