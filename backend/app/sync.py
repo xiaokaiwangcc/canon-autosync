@@ -40,20 +40,23 @@ class SyncEngine:
         self._device_fetched = False
         self._stop_requested = False
         self._camera_client: CanonCamera | None = None
-        self._camera_address: tuple[str, int] | None = None
+        self._camera_address: tuple[str, int, str, str | None] | None = None
         self._config_changed = asyncio.Event()
 
     def camera(self) -> CanonCamera:
-        address = (self.config.camera_ip, self.config.camera_port)
+        address = self.config.camera_connection
         if self._camera_client is None or self._camera_address != address:
-            self._camera_client = CanonCamera(*address)
+            self._camera_client = CanonCamera(
+                self.config.camera_ip, self.config.camera_port,
+                protocol=self.config.camera_protocol, fingerprint=self.config.camera_fingerprint,
+            )
             self._camera_address = address
         return self._camera_client
 
     def apply_config(self, config: Config) -> None:
         previous = self.config
         self.config = config
-        if (previous.camera_ip, previous.camera_port) != (config.camera_ip, config.camera_port):
+        if previous.camera_connection != config.camera_connection:
             self.camera_files = []
             self.camera_online = False
             self.camera_warning = None
@@ -93,7 +96,7 @@ class SyncEngine:
         return self.camera_online
 
     def _unreachable_messages(self, error: CameraUnreachable) -> tuple[str, str]:
-        addr = f"http://{self.config.camera_ip}:{self.config.camera_port}"
+        addr = self.camera().base
         return (
             f"相机连接失败（{error}）。请在浏览器中访问 {addr} 检查 CCAPI 是否通畅："
             "能打开说明网络正常，可点击「重试连接」；"
@@ -344,7 +347,12 @@ class SyncEngine:
         deadline = time.monotonic() + max(self.config.poll_interval, 10)
         # 整个等待窗口复用同一连接：相机对新建连接的轮询立即返回空响应，
         # 只有复用连接长轮询才会真正挂起，事件才能秒级送达
-        async with httpx.AsyncClient() as poll_client:
+        try:
+            client = cam.client()
+        except CameraUnreachable:
+            self.camera_online = False
+            return False
+        async with client as poll_client:
             while time.monotonic() < deadline and not self._config_changed.is_set():
                 started = time.monotonic()
                 try:

@@ -17,6 +17,11 @@ async function req(path, options) {
 export const api = {
   status: () => req('/api/status'),
   config: () => req('/api/config'),
+  cameraFingerprint: ({ camera_ip, camera_port }) => req('/api/camera/fingerprint', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ camera_ip, camera_port }),
+  }),
   saveConfig: (cfg) =>
     req('/api/config', {
       method: 'POST',

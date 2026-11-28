@@ -3,6 +3,7 @@ import locale
 import os
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,11 +20,18 @@ APP_VERSION = os.environ.get("APP_VERSION", "1.2.2")
 class Config(BaseModel):
     camera_ip: str = "192.168.5.53"
     camera_port: int = Field(8080, ge=1, le=65535)
+    camera_protocol: Literal["http", "https"] = "http"
+    camera_fingerprint: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+
     nas_path: str = "/Volumes/photos/canon-backup"
     auto_sync: bool = True
     sync_on_event: bool = True  # 事件驱动：相机有新文件时秒级同步
     delete_after_sync: bool = False  # 同步完成后删除卡上已备份文件（谨慎）
     poll_interval: int = Field(60, ge=1)  # 兜底扫描间隔（秒）
+
+    @property
+    def camera_connection(self):
+        return (self.camera_ip, self.camera_port, self.camera_protocol, self.camera_fingerprint)
 
 
 def read_json(path: Path) -> dict:

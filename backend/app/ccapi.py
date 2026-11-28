@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 
 from .backup import run_io
+from .camera_tls import pinned_context
 
 CCAPI_ROOT = "/ccapi/"
 VERSION_ROOT_RE = re.compile(r"^/ccapi/ver(\d+)/?$")
@@ -51,16 +52,26 @@ class CapabilityUnsupported(Exception):
 
 
 class CanonCamera:
-    def __init__(self, ip: str, port: int = 8080, timeout: float = 10.0):
+    def __init__(self, ip: str, port: int = 8080, timeout: float = 10.0, *, protocol="http", fingerprint=None):
         self.ip = ip
         self.port = port
-        self.base = f"http://{ip}:{port}"
+        self.base = f"{protocol}://{ip}:{port}"
+        self.protocol = protocol
+        self.fingerprint = fingerprint
+        self._tls = pinned_context(fingerprint) if protocol == "https" and fingerprint else None
         self.timeout = timeout
         self._catalog_loaded = False
         self._advertised_paths: set[str] = set()
         self._endpoint_cache: dict[str, str] = {}
         self._unsupported_capabilities: set[str] = set()
         self._contents_list_mode: str | None = None
+
+    def client(self, **kwargs) -> httpx.AsyncClient:
+        if self.protocol == "https":
+            if self._tls is None:
+                raise CameraUnreachable("请在设置中确认相机证书", english="Confirm the camera certificate in Settings.")
+            return httpx.AsyncClient(verify=self._tls, trust_env=False, **kwargs)
+        return httpx.AsyncClient(**kwargs)
 
     async def _get(self, path: str, retries: int = 0, timeout=None, client: httpx.AsyncClient | None = None, **kwargs) -> httpx.Response:
         last_err: Exception | None = None
@@ -71,7 +82,7 @@ class CanonCamera:
                     # 复用调用方传入的连接（事件长轮询等场景）
                     resp = await client.get(url, timeout=timeout or self.timeout, **kwargs)
                 else:
-                    async with httpx.AsyncClient(timeout=timeout or self.timeout) as c:
+                    async with self.client(timeout=timeout or self.timeout) as c:
                         resp = await c.get(url, **kwargs)
                 resp.raise_for_status()
                 return resp
@@ -221,7 +232,7 @@ class CanonCamera:
 
     async def disable_autopoweroff(self) -> None:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with self.client(timeout=self.timeout) as client:
                 await client.put(
                     f"{self.base}/ccapi/ver100/functions/autopoweroff",
                     json={"value": "disable"},
@@ -370,7 +381,7 @@ class CanonCamera:
         写盘走线程池，避免备份目录为网络挂载时阻塞事件循环导致整体无响应。
         """
         size = 0
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=20.0)) as client:
+        async with self.client(timeout=httpx.Timeout(20.0, read=20.0)) as client:
             for attempt in range(3):
                 try:
                     async with client.stream(
@@ -429,7 +440,7 @@ class CanonCamera:
 
     async def delete(self, href: str) -> None:
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with self.client(timeout=self.timeout) as client:
                 resp = await client.delete(f"{self.base}{href}")
                 resp.raise_for_status()
         except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
