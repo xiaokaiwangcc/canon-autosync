@@ -498,6 +498,8 @@ const ICON_GITHUB = (
 const DEFAULT_CFG = {
   camera_ip: '192.168.5.53',
   camera_port: 8080,
+  camera_protocol: 'http',
+  camera_fingerprint: null,
   nas_path: '/Volumes/photos/canon-backup',
   auto_sync: true,
   sync_on_event: true,
@@ -540,10 +542,15 @@ function Toggle({ checked, onChange, label, desc }) {
   )
 }
 
+function displayFingerprint(value) {
+  return value.toUpperCase().match(/.{2}/g).join(':')
+}
+
 function ConfigForm({ version }) {
   const { language, setLanguage, t } = useLanguage()
   const [cfg, setCfg] = useState(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
@@ -560,12 +567,22 @@ function ConfigForm({ version }) {
     }
     setSaveError(null)
     setSaved(false)
+    setSaving(true)
     try {
-      await api.saveConfig({ ...cfg, camera_port: Number(cfg.camera_port), poll_interval: Number(cfg.poll_interval) })
+      const settings = { ...cfg, camera_port: Number(cfg.camera_port), poll_interval: Number(cfg.poll_interval) }
+      if (settings.camera_protocol === 'https' && !settings.camera_fingerprint) {
+        const { fingerprint } = await api.cameraFingerprint(settings)
+        const address = settings.camera_ip + ':' + settings.camera_port
+        if (!window.confirm(t('confirmCameraCertificate') + '\n' + address + '\nSHA-256: ' + displayFingerprint(fingerprint))) return
+        settings.camera_fingerprint = fingerprint
+      }
+      setCfg(await api.saveConfig(settings))
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
-      setSaveError(err.status === 409 ? 'settingsSyncInProgress' : 'settingsSaveFailed')
+      setSaveError(err.status === 409 ? 'settingsSyncInProgress' : err.status === 502 ? 'certificateReadFailed' : 'settingsSaveFailed')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -575,7 +592,7 @@ function ConfigForm({ version }) {
   }
 
   return (
-    <form className="settings-form" onSubmit={submit}>
+    <form className="settings-form" inert={saving ? '' : undefined} onSubmit={submit}>
       {saveError && <div className="error" role="alert">{t(saveError)}</div>}
       <div className="settings-grid">
         <div className="settings-col">
@@ -583,12 +600,28 @@ function ConfigForm({ version }) {
             <div className="form-grid">
               <div className="field" style={{ gridColumn: 'span 1', flex: 3 }}>
                 <label>{t('cameraIp')}</label>
-                <input className="mono" value={cfg.camera_ip} onChange={(e) => set('camera_ip', e.target.value)} />
+                <input className="mono" value={cfg.camera_ip} onChange={(e) => setCfg({ ...cfg, camera_ip: e.target.value, camera_fingerprint: null })} />
               </div>
               <div className="field" style={{ maxWidth: 120 }}>
                 <label>{t('port')}</label>
-                <input className="mono" type="number" value={cfg.camera_port} onChange={(e) => set('camera_port', e.target.value)} />
+                <input className="mono" type="number" value={cfg.camera_port} onChange={(e) => setCfg({ ...cfg, camera_port: e.target.value, camera_fingerprint: null })} />
               </div>
+            </div>
+            <div className="field">
+              <label htmlFor="camera-protocol">{t('cameraProtocol')}</label>
+              <select id="camera-protocol" value={cfg.camera_protocol} onChange={(e) => {
+                const https = e.target.value === 'https'
+                const port = Number(cfg.camera_port)
+                setCfg({ ...cfg, camera_protocol: e.target.value, camera_fingerprint: null,
+                  camera_port: !port || port === (https ? 8080 : 443) ? (https ? 443 : 8080) : port })
+              }}>
+                <option value="http">HTTP</option>
+                <option value="https">HTTPS</option>
+              </select>
+              {cfg.camera_protocol === 'https' && cfg.camera_fingerprint && <>
+                <code style={{ overflowWrap: 'anywhere' }}>SHA-256: {displayFingerprint(cfg.camera_fingerprint)}</code>
+                <button type="button" className="ghost" onClick={() => set('camera_fingerprint', null)}>{t('replaceCertificate')}</button>
+              </>}
             </div>
           </SectionCard>
           <SectionCard icon={ICON_REFRESH} title={t('syncPreferences')} subtitle={t('syncPreferencesHint')}>
@@ -664,7 +697,7 @@ function ConfigForm({ version }) {
       </div>
       <div className="settings-actions">
         <button type="button" className="ghost" onClick={resetDefaults}>{t('restoreDefaults')}</button>
-        <button type="submit" className="btn-danger">{t('saveSettings')}</button>
+        <button type="submit" disabled={saving} className="btn-danger">{t(saving ? 'savingSettings' : 'saveSettings')}</button>
         {saved && <span className="muted" style={{ alignSelf: 'center' }}>{t('saved')}</span>}
       </div>
     </form>

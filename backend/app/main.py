@@ -13,6 +13,7 @@ import threading
 from pathlib import Path
 
 import httpx
+from pydantic import BaseModel, Field, field_validator
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from .access import api_password, protect_requests
 from .backup import BackupTarget, media_path, run_io
 from .ccapi import CanonCamera, CameraUnreachable
+from .camera_tls import discover_fingerprint
 from .config import Config, DATA_DIR, load_config, save_config
 from .log import attach_uvicorn_to_file, setup_logging
 from .state import State
@@ -81,11 +83,37 @@ def get_config():
     return config.model_dump()
 
 
+class CameraAddress(BaseModel):
+    camera_ip: str
+    camera_port: int = Field(ge=1, le=65535)
+
+    @field_validator("camera_ip")
+    @classmethod
+    def nonblank_host(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Camera address is required")
+        return value.strip()
+
+
+@app.post("/api/camera/fingerprint")
+async def camera_fingerprint(cfg: CameraAddress):
+    if engine.syncing:
+        raise HTTPException(409, "Wait for the current sync to finish before pairing")
+    try:
+        return {"fingerprint": await discover_fingerprint(cfg.camera_ip, cfg.camera_port)}
+    except (OSError, ValueError) as error:
+        raise HTTPException(502, "Could not read the camera certificate") from error
+
+
 @app.post("/api/config")
 async def update_config(cfg: Config):
     global config
     if engine.syncing:
         raise HTTPException(409, "Wait for the current sync to finish before changing settings")
+    if cfg.camera_protocol == "https" and not cfg.camera_fingerprint:
+        raise HTTPException(422, "Confirm the camera certificate before saving")
+    if cfg.camera_protocol == "http":
+        cfg.camera_fingerprint = None
     save_config(cfg)
     config = cfg
     engine.apply_config(cfg)
@@ -279,7 +307,7 @@ def list_pending():
 # 保护：信号量限制小并发窗口 + 请求失败重试 + 内存缓存（轮询刷新不再重复打相机）
 # 再加浏览器缓存头：切页/刷新后命中本地缓存，不再请求后端
 _thumb_sem = asyncio.Semaphore(2)
-_thumb_cache: dict[tuple[str, int, str], tuple[bytes, str]] = {}
+_thumb_cache: dict[tuple[str, str | None, str], tuple[bytes, str]] = {}
 _CACHE_HEADERS = {
     "Cache-Control": "private, max-age=600",
     "Cross-Origin-Resource-Policy": "same-origin",
@@ -294,12 +322,12 @@ async def thumbnail(path: str = Query(...)):
     except ValueError as error:
         raise HTTPException(400, "Invalid camera file path") from error
     cam: CanonCamera = engine.camera()
-    key = (cam.ip, cam.port, path)
+    key = (cam.base, cam.fingerprint, path)
     cached = _thumb_cache.get(key)
     if cached:
         return StreamingResponse(iter([cached[0]]), media_type=cached[1], headers=_CACHE_HEADERS)
     try:
-        async with httpx.AsyncClient(timeout=10) as client:  # 重试复用同一连接
+        async with cam.client(timeout=10) as client:  # 重试复用同一连接
             for attempt in range(2):
                 async with _thumb_sem:
                     cached = _thumb_cache.get(key)
