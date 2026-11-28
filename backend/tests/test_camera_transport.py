@@ -28,6 +28,10 @@ class CameraHandler(BaseHTTPRequestHandler):
         pass
 
     def do_PUT(self):
+        payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if payload != {"value": "disable"}:
+            self.send_error(400)
+            return
         self.server.requests.append(self.path)
         self.send_response(204)
         self.end_headers()
